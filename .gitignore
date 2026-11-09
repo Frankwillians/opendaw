@@ -1,3 +1,41 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6d94559fe5f1f530f08d0432565aacf78dfae4cb863c0a64cdc7bde19f75f5c8
-size 777
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+desktop/node_modules
+dist
+dist-ssr
+release/
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Saída dos autotestes
+desktop/selftest-*.wav
+desktop/selftest-*.png
+desktop/selftest-out.json
+desktop/selftest-raw.txt
+desktop/selftest-*.log
+
+# Build artifacts
+desktop/icon.ico
+desktop/build-res/
+desktop/tools/icon-out/
+desktop/exe-build.log
+desktop/repack-final.log
+desktop/make-icon.cjs
