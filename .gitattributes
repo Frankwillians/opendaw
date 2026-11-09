@@ -1,3 +1,7 @@
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.exe filter=lfs diff=lfs merge=lfs -text
+*.pak filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
 *.md filter=lfs diff=lfs merge=lfs -text
 *.gitignore filter=lfs diff=lfs merge=lfs -text
 *.json filter=lfs diff=lfs merge=lfs -text
@@ -17,8 +21,6 @@
 *.ps1 filter=lfs diff=lfs merge=lfs -text
 *.dll filter=lfs diff=lfs merge=lfs -text
 /release/OpenDAW/LICENSE filter=lfs diff=lfs merge=lfs -text
-*.exe filter=lfs diff=lfs merge=lfs -text
-*.pak filter=lfs diff=lfs merge=lfs -text
 *.dat filter=lfs diff=lfs merge=lfs -text
 *.lib filter=lfs diff=lfs merge=lfs -text
 *.node filter=lfs diff=lfs merge=lfs -text
@@ -31,5 +33,4 @@
 *.def filter=lfs diff=lfs merge=lfs -text
 *.h filter=lfs diff=lfs merge=lfs -text
 /release/OpenDAW/resources/app/node_modules/koffi/vendor/node-api-headers/LICENSE filter=lfs diff=lfs merge=lfs -text
-*.bin filter=lfs diff=lfs merge=lfs -text
 /release/OpenDAW/version filter=lfs diff=lfs merge=lfs -text
