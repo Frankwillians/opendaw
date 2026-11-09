@@ -1,3 +1,14 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:db9630cfcafc7ab52e334584270352ac94d7a4539d124f44d1ba014bb32889fd
-size 602
+/**
+ * Minimal typing for the pure-JS LAME encoder (`lamejs`). The package ships no
+ * types, and only the two members the MP3 export path touches are declared -
+ * enough to keep `tsc -b` honest without pulling in the whole encoder surface.
+ */
+declare module 'lamejs' {
+  export class Mp3Encoder {
+    constructor(channels: number, sampleRate: number, kbps: number)
+    /** Feed one block of 16-bit samples; returns the MP3 bytes produced so far. */
+    encodeBuffer(left: Int16Array, right?: Int16Array): Int8Array
+    /** Drain the encoder at the end of the stream. */
+    flush(): Int8Array
+  }
+}

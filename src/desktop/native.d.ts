@@ -1,0 +1,640 @@
+/**
+ * The renderer's view of the desktop executable.
+ *
+ * Everything here is optional: in the browser `window.OpenDAW` is undefined and
+ * the DAW behaves exactly as it always has. In the executable the same calls go
+ * through the operating system instead — real save and open dialogs, and the
+ * native plugin process that hosts VST files.
+ */
+import type { LiveBlockReply, LiveOpenReply, LiveOpenRequest } from '../audio/native-live';
+export interface NativeInfo {
+    native: true;
+    platform: string;
+    version: string;
+    electron: string;
+    chrome: string;
+    node: string;
+    documents: string;
+    dist: string;
+    servedFrom: string | null;
+}
+export interface NativeSaveResult {
+    canceled: boolean;
+    path?: string;
+    error?: string;
+}
+export interface NativeOpenResult {
+    canceled: boolean;
+    path?: string;
+    name?: string;
+    text?: string | null;
+    data?: Uint8Array;
+    error?: string;
+}
+export interface NativeParameter {
+    index: number;
+    name: string;
+    label: string;
+    display: string;
+    value: number;
+}
+export interface NativePluginInfo {
+    /** 'vst2' or 'vst3' — which engine opened the file. */
+    kind: string;
+    path: string;
+    file: string;
+    name: string;
+    vendor: string;
+    product: string;
+    pluginVersion: number;
+    vstVersion: number;
+    uniqueId: number;
+    numParams: number;
+    numPrograms: number;
+    numInputs: number;
+    numOutputs: number;
+    program: number;
+    programName: string;
+    initialDelay: number;
+    tail: number;
+    hasEditor: boolean;
+    canReplace: boolean;
+    wantsChunks: boolean;
+    isSynth: boolean;
+    /** VST3 only: the parameter flagged kIsBypass, so the panel can bypass inside the plugin. */
+    bypassId?: number | null;
+    /** VST3 only: how the two halves of the plugin answered the host. */
+    connection?: string;
+    /** VST3 only: the audio busses the plugin declares. */
+    buses?: {
+        direction: string;
+        name: string;
+        channels: number;
+        type: number;
+    }[];
+    params: NativeParameter[];
+    hostCalls: string[];
+    canDo: string[];
+}
+/** What the disk scan found. `error` is set for anything that cannot be used. */
+export interface NativePluginEntry {
+    path: string;
+    /** The name the producer reads: the bundle's own description, or the file name. */
+    label?: string;
+    binary?: string;
+    kind: 'vst2' | 'vst3' | 'estranho';
+    entry?: string;
+    arch?: string;
+    exports?: number;
+    error?: string;
+    meta?: {
+        module?: string;
+        vendor?: string;
+        info?: Record<string, unknown>;
+        classes?: {
+            name: string;
+            vendor?: string;
+            category: string;
+            subCategories: string[];
+        }[];
+    } | null;
+}
+/** One folder the scan walked, and what it gave up. */
+export interface NativeScannedDir {
+    path: string;
+    exists: boolean;
+    /** Plugin-shaped files found under it — bundles and DLLs, before any loading. */
+    files: number;
+}
+/** Answer to a scan: the files plus the folders that were actually walked. */
+export interface NativeScanResult {
+    ok: boolean;
+    plugins?: NativePluginEntry[];
+    dirs?: NativeScannedDir[];
+    error?: string;
+}
+/** Answer to the "add a folder" dialog. */
+export interface NativeAddDirResult {
+    ok?: boolean;
+    canceled?: boolean;
+    added?: string;
+    dirs?: string[];
+    error?: string;
+}
+export interface NativeRenderResult {
+    ok: boolean;
+    error?: string;
+    info?: NativePluginInfo;
+    /** What the plugin sent back on the way out: its meters, and knobs it moved itself. */
+    reported?: {
+        id: number;
+        value: number;
+        name: string;
+    }[];
+    outputWav?: Uint8Array;
+    peak?: number;
+    nonSilent?: number;
+    total?: number;
+    bad?: number;
+}
+/** Answer to a plugin-interface call. */
+export interface NativeGuiResult {
+    ok: boolean;
+    error?: string;
+    /**
+     * The process answering has never opened this plugin — after a fault, the
+     * fresh child knows nothing, and an open window on the old one is gone with it.
+     * Different from `state.open === false`: that is the plugin closing its own GUI.
+     */
+    noEditor?: boolean;
+    /** 'vst2' or 'vst3', from the engine that owns the window. */
+    kind?: string;
+    /**
+     * Whether the plugin's window is on the screen. A minimised panel puts the
+     * interface away without closing the plugin, so the panel needs to know which
+     * of the two happened rather than reading "still open" off both.
+     */
+    visible?: boolean;
+    state?: {
+        open: boolean;
+        kind?: string;
+        /** Native window handle, as a number: valid across processes. */
+        hwnd?: number;
+        clientWidth?: number;
+        clientHeight?: number;
+        x?: number;
+        y?: number;
+        /** The plugin asked for this size itself (audioMasterSizeWindow / resizeView). */
+        pluginAskedForSize?: boolean;
+        childrenFitted?: number;
+        openCode?: number;
+        attachCode?: number;
+        platformType?: string;
+    };
+    /** Values the plugin holds right now, for a panel that mirrors its GUI. */
+    reported?: {
+        id: number;
+        value: number;
+        name: string;
+    }[];
+    info?: NativePluginInfo;
+}
+export type NativeMenuAction = 'new-project' | 'open-project' | 'save-project' | 'import-audio' | 'export-mix' | 'undo' | 'redo' | 'refresh-inputs' | 'midi-devices' | 'scan-plugins' | 'plugin-panel';
+/** One row of a menu, exactly as the page draws it. */
+export interface NativeMenuItem {
+    label: string;
+    disabled?: boolean;
+    separator?: boolean;
+}
+export interface NativeMenuGroup {
+    label: string;
+    items: NativeMenuItem[];
+}
+/**
+ * What the OS menu bar reports when the producer picks something: either one of
+ * the items the executable adds to itself, or the position of a mirrored row.
+ */
+export type NativeMenuClick = {
+    action: NativeMenuAction;
+} | {
+    menu: number;
+    item: number;
+};
+/** The audio system record the native side keeps for the next launch. */
+export interface NativeAudioSystemSettings {
+    /** Which backend to ask Chromium for: 'wasapi' | 'wasapi-exclusive' | 'waveout' | 'dummy'. */
+    system: string;
+    /** Requested context rate; 0 means "whatever the driver gives". */
+    sampleRate: number;
+    /** Requested WebAudio latency hint: 'interactive' | 'balanced' | 'playback'. */
+    latency: string;
+    /** Frames per buffer; 0 keeps Chromium's own number. */
+    bufferSize: number;
+}
+export interface NativeAudioSystemSetResult {
+    ok: boolean;
+    settings?: NativeAudioSystemSettings;
+    error?: string;
+}
+/** Um dispositivo ASIO de saída real desta máquina, como o PortAudio o vê. */
+export interface NativeAsioDevice {
+    index: number;
+    name: string;
+    hostApiName: string;
+    maxInputChannels: number;
+    maxOutputChannels: number;
+    defaultSampleRate: number;
+    defaultLowOutputLatency: number;
+    isDefaultOutput: boolean;
+}
+export interface NativeAsioDevicesResult {
+    ok: boolean;
+    devices: NativeAsioDevice[];
+    asioPresent: boolean;
+    error?: string;
+}
+export interface NativeAsioOpenRequest {
+    /** Índice PortAudio do dispositivo; -1 deixa o worker escolher o padrão ASIO. */
+    deviceIndex: number;
+    /** Taxa do contexto de áudio, para o stream casar sem resample. */
+    sampleRate: number;
+    channels: number;
+    /** Frames por buffer do driver ASIO. */
+    frames: number;
+    /** Canais de entrada desejados (0 = apenas saída). */
+    inputChannels?: number;
+}
+export interface NativeAsioOpenResult {
+    ok: boolean;
+    deviceName?: string;
+    deviceIndex?: number;
+    sampleRate?: number;
+    channels?: number;
+    frames?: number;
+    outputLatencyMs?: number;
+    inputLatencyMs?: number;
+    inputChannels?: number;
+    error?: string;
+}
+/** O que o worker ASIO empurra para a UI: nível, xruns, latência, blocos. */
+export interface NativeAsioStatus {
+    active: boolean;
+    running: boolean;
+    deviceName: string;
+    deviceIndex: number;
+    sampleRate: number;
+    channels: number;
+    frames: number;
+    outputLatencyMs: number;
+    inputLatencyMs: number;
+    inputChannels: number;
+    blocksWritten: number;
+    framesWritten: number;
+    silenceBlocks: number;
+    xruns: number;
+    writeErrors: number;
+    readErrors: number;
+    lastError: string;
+    peak: number;
+    peakIn: number;
+    bufferFillOut: number;
+    bufferFillIn: number;
+    uptimeMs: number;
+    pcmMessages: number;
+    pcmFloats: number;
+    portAttached: boolean;
+    portInAttached: boolean;
+}
+interface OpenDAWApi {
+    native: true;
+    platform: string;
+    versions: {
+        electron: string;
+        chrome: string;
+        node: string;
+    };
+    info: () => Promise<NativeInfo>;
+    saveFile: (options: {
+        kind: 'project' | 'chain' | 'audio' | 'midi' | 'image' | 'any';
+        defaultName: string;
+        data: ArrayBuffer | Uint8Array;
+    }) => Promise<NativeSaveResult>;
+    openFile: (options: {
+        kind: 'project' | 'chain' | 'audio' | 'midi' | 'any';
+    }) => Promise<NativeOpenResult>;
+    plugins: {
+        scan: (dirs?: string[]) => Promise<NativeScanResult>;
+        /**
+         * Choose one more folder to scan, with the operating system's own picker.
+         * Optional because a browser has no folder to point at; the answer is kept by
+         * the native side, so a folder added once is looked in forever after.
+         */
+        addDir?: () => Promise<NativeAddDirResult>;
+        describe: (path: string, sampleRate?: number) => Promise<{
+            ok: boolean;
+            info?: NativePluginInfo;
+            error?: string;
+        }>;
+        render: (request: {
+            path: string;
+            params?: {
+                index: number;
+                value: number;
+            }[];
+            sampleRate?: number;
+            seconds?: number;
+            inputWav?: ArrayBuffer | Uint8Array;
+        }) => Promise<NativeRenderResult>;
+        /**
+         * Hand the panel's values to the plugin itself. Optional because a browser
+         * has no plugin process to talk to, and because a plugin that exposes no
+         * parameters simply has nothing to send.
+         */
+        setParams?: (request: {
+            path: string;
+            params: {
+                index: number;
+                value: number;
+            }[];
+            sampleRate?: number;
+        }) => Promise<NativeGuiResult>;
+        /**
+         * The plugin's own interface, as a native window. `rect` is the FX panel's
+         * box in CSS pixels of this viewport; the native side converts it to the
+         * screen and puts the plugin's drawing area there.
+         *
+         * `sessionId` says which chain row the window belongs to, and it is the same
+         * row identity the live session uses: a lane can carry the same file twice,
+         * and then each row has its own interface with its own knobs. Without it a
+         * host is asking about the file, which is what the older calls do.
+         */
+        guiOpen?: (request: {
+            path: string;
+            sessionId?: string;
+            sampleRate?: number;
+            rect?: {
+                x: number;
+                y: number;
+                width: number;
+                height: number;
+            };
+        }) => Promise<NativeGuiResult>;
+        guiPlace?: (request: {
+            path: string;
+            sessionId?: string;
+            rect?: {
+                x: number;
+                y: number;
+                width: number;
+                height: number;
+            };
+        }) => Promise<NativeGuiResult>;
+        guiState?: (request: {
+            path: string;
+            sessionId?: string;
+        }) => Promise<NativeGuiResult>;
+        /**
+         * Show or hide the plugin's window without closing the plugin. The FX panel
+         * can be minimised, and an interface left on the desktop with no pane under
+         * it is a window the producer did not ask to keep.
+         */
+        guiShow?: (request: {
+            path: string;
+            sessionId?: string;
+            visible?: boolean;
+        }) => Promise<NativeGuiResult>;
+        guiClose?: (request: {
+            path: string;
+            sessionId?: string;
+        }) => Promise<NativeGuiResult>;
+        /**
+         * The live session: the plugin is opened at a real-time block size, fed one
+         * batch of samples at a time, and closed when the lane stops listening. These
+         * are optional for the same reason the rest of this object is — a browser has
+         * no plugin process — and a lane without them simply hears the dry input.
+         */
+        liveOpen?: (request: LiveOpenRequest) => Promise<LiveOpenReply>;
+        liveBlock?: (request: {
+            path: string;
+            left: Float32Array;
+            right: Float32Array;
+        }) => Promise<LiveBlockReply>;
+        liveParams?: (request: {
+            path: string;
+            params: {
+                index: number;
+                value: number;
+            }[];
+        }) => Promise<{
+            ok: boolean;
+            error?: string;
+        }>;
+        liveClose?: (request: {
+            path: string;
+        }) => Promise<{
+            ok: boolean;
+            blocks?: number;
+            error?: string;
+        }>;
+    };
+    /**
+     * The audio system the executable was started with. Chromium picks its Windows
+     * backend once, before the first stream: exclusive WASAPI and WaveOut are
+     * command-line switches, not things a running context can change. So the choice
+     * is written to a small file next to the app's other settings and read on the
+     * next launch, while the page keeps its own copy for the UI.
+     */
+    audioSystem?: {
+        get: () => Promise<NativeAudioSystemSettings | null>;
+        set: (settings: NativeAudioSystemSettings) => Promise<NativeAudioSystemSetResult>;
+    };
+    /**
+     * O sink ASIO nativo — a saída do mix pelo driver exclusivo da interface.
+     * Opcional porque um navegador não tem processo nativo nem PortAudio; só o
+     * executável o expõe. A mixagem continua no WebAudio e a entrada no WASAPI:
+     * isto é a saída ASIO, não um motor full-duplex.
+     */
+    asio?: {
+        devices: () => Promise<NativeAsioDevicesResult>;
+        open: (request: NativeAsioOpenRequest) => Promise<NativeAsioOpenResult>;
+        close: () => Promise<{
+            ok: boolean;
+            error?: string;
+        }>;
+        status: () => Promise<NativeAsioStatus & {
+            ok: boolean;
+        }>;
+        onStatus: (handler: (status: NativeAsioStatus) => void) => () => void;
+        onCrash: (handler: (info: {
+            faulted: boolean;
+            code: number;
+        }) => void) => () => void;
+    };
+    onMenu: (handler: (click: NativeMenuClick) => void) => () => void;
+    /** Hand the page's own menu structure over, so the OS bar can mirror it. */
+    setMenu?: (groups: NativeMenuGroup[]) => void;
+}
+declare global {
+    interface Window {
+        OpenDAW?: OpenDAWApi;
+    }
+}
+export declare function nativeApi(): OpenDAWApi | null;
+export declare function isNativeApp(): boolean;
+export declare function setNativeToastHandler(handler: ((message: string) => void) | null): void;
+/** Say something through the app's own toast, for callers outside the component. */
+export declare function nativeNotify(message: string): void;
+/**
+ * Write through the OS dialog. Resolves with the chosen path, or null when the
+ * producer cancels. The browser path (an <a download> click) is kept in
+ * `downloadBlob` for the web version.
+ */
+export declare function nativeSaveBlob(blob: Blob, filename: string): Promise<string | null>;
+/** Ask the OS for a file and hand back its text (projects and chain presets). */
+export declare function nativeOpenText(kind: 'project' | 'chain'): Promise<string | null>;
+/** Ask the OS for an audio file and hand back the bytes for decodeAudioData. */
+export declare function nativeOpenAudio(): Promise<{
+    bytes: Uint8Array;
+    name: string;
+} | null>;
+/** Ask the OS for a Standard MIDI File and hand back its raw bytes. */
+export declare function nativeOpenMidi(): Promise<{
+    bytes: Uint8Array;
+    name: string;
+} | null>;
+export declare function onNativeMenu(handler: (click: NativeMenuClick) => void): () => void;
+/**
+ * Read the menu bar the page just drew.
+ *
+ * The executable and the browser must not drift apart, so the native bar is not
+ * a second list of commands somebody has to remember to update: it is the page's
+ * own DOM, serialized. Labels that change with state ("Desfazer (3)", "Snap
+ * (on)") and rows that are disabled come along for free.
+ */
+export declare function serializeMenuBar(nav: HTMLElement): NativeMenuGroup[];
+/** Press the page's own button that the mirrored row belongs to. */
+export declare function clickNativeMenuItem(nav: HTMLElement, menu: number, item: number): boolean;
+/**
+ * Keep the OS menu bar in step with the page's menu bar.
+ *
+ * React rewrites the labels as the project changes, so a MutationObserver on the
+ * nav re-sends the structure (debounced: one project edit touches many nodes).
+ * Returns the stop function.
+ */
+export declare function mirrorMenuBar(nav: HTMLElement): () => void;
+export declare const pluginApi: () => {
+    scan: (dirs?: string[]) => Promise<NativeScanResult>;
+    /**
+     * Choose one more folder to scan, with the operating system's own picker.
+     * Optional because a browser has no folder to point at; the answer is kept by
+     * the native side, so a folder added once is looked in forever after.
+     */
+    addDir?: () => Promise<NativeAddDirResult>;
+    describe: (path: string, sampleRate?: number) => Promise<{
+        ok: boolean;
+        info?: NativePluginInfo;
+        error?: string;
+    }>;
+    render: (request: {
+        path: string;
+        params?: {
+            index: number;
+            value: number;
+        }[];
+        sampleRate?: number;
+        seconds?: number;
+        inputWav?: ArrayBuffer | Uint8Array;
+    }) => Promise<NativeRenderResult>;
+    /**
+     * Hand the panel's values to the plugin itself. Optional because a browser
+     * has no plugin process to talk to, and because a plugin that exposes no
+     * parameters simply has nothing to send.
+     */
+    setParams?: (request: {
+        path: string;
+        params: {
+            index: number;
+            value: number;
+        }[];
+        sampleRate?: number;
+    }) => Promise<NativeGuiResult>;
+    /**
+     * The plugin's own interface, as a native window. `rect` is the FX panel's
+     * box in CSS pixels of this viewport; the native side converts it to the
+     * screen and puts the plugin's drawing area there.
+     *
+     * `sessionId` says which chain row the window belongs to, and it is the same
+     * row identity the live session uses: a lane can carry the same file twice,
+     * and then each row has its own interface with its own knobs. Without it a
+     * host is asking about the file, which is what the older calls do.
+     */
+    guiOpen?: (request: {
+        path: string;
+        sessionId?: string;
+        sampleRate?: number;
+        rect?: {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+        };
+    }) => Promise<NativeGuiResult>;
+    guiPlace?: (request: {
+        path: string;
+        sessionId?: string;
+        rect?: {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+        };
+    }) => Promise<NativeGuiResult>;
+    guiState?: (request: {
+        path: string;
+        sessionId?: string;
+    }) => Promise<NativeGuiResult>;
+    /**
+     * Show or hide the plugin's window without closing the plugin. The FX panel
+     * can be minimised, and an interface left on the desktop with no pane under
+     * it is a window the producer did not ask to keep.
+     */
+    guiShow?: (request: {
+        path: string;
+        sessionId?: string;
+        visible?: boolean;
+    }) => Promise<NativeGuiResult>;
+    guiClose?: (request: {
+        path: string;
+        sessionId?: string;
+    }) => Promise<NativeGuiResult>;
+    /**
+     * The live session: the plugin is opened at a real-time block size, fed one
+     * batch of samples at a time, and closed when the lane stops listening. These
+     * are optional for the same reason the rest of this object is — a browser has
+     * no plugin process — and a lane without them simply hears the dry input.
+     */
+    liveOpen?: (request: LiveOpenRequest) => Promise<LiveOpenReply>;
+    liveBlock?: (request: {
+        path: string;
+        left: Float32Array;
+        right: Float32Array;
+    }) => Promise<LiveBlockReply>;
+    liveParams?: (request: {
+        path: string;
+        params: {
+            index: number;
+            value: number;
+        }[];
+    }) => Promise<{
+        ok: boolean;
+        error?: string;
+    }>;
+    liveClose?: (request: {
+        path: string;
+    }) => Promise<{
+        ok: boolean;
+        blocks?: number;
+        error?: string;
+    }>;
+} | null;
+export declare const audioSystemApi: () => {
+    get: () => Promise<NativeAudioSystemSettings | null>;
+    set: (settings: NativeAudioSystemSettings) => Promise<NativeAudioSystemSetResult>;
+} | null;
+export declare const asioApi: () => {
+    devices: () => Promise<NativeAsioDevicesResult>;
+    open: (request: NativeAsioOpenRequest) => Promise<NativeAsioOpenResult>;
+    close: () => Promise<{
+        ok: boolean;
+        error?: string;
+    }>;
+    status: () => Promise<NativeAsioStatus & {
+        ok: boolean;
+    }>;
+    onStatus: (handler: (status: NativeAsioStatus) => void) => () => void;
+    onCrash: (handler: (info: {
+        faulted: boolean;
+        code: number;
+    }) => void) => () => void;
+} | null;
+export {};

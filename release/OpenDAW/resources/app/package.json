@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:98b4dd8cb9b035774e4e4c7a47a60e0b8a1801f5ecb91c4351b670db29f7df54
-size 252
+{
+  "name": "opendaw-desktop",
+  "productName": "OpenDAW",
+  "version": "1.0.0",
+  "description": "OpenDAW — versão executável para PC, com hospedagem nativa de plugins VST.",
+  "main": "desktop/main.cjs",
+  "type": "commonjs",
+  "private": true
+}

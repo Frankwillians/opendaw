@@ -1,3 +1,22 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:41e9c7028f08720eaa7334221c196bdf95556bbf49e1b76cd3ad8cad60194c63
-size 537
+{
+  "name": "opendaw-desktop",
+  "productName": "OpenDAW",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenDAW — versão executável para PC, com hospedagem nativa de plugins VST.",
+  "main": "main.cjs",
+  "type": "commonjs",
+  "author": "OpenDAW",
+  "scripts": {
+    "start": "electron .",
+    "selftest": "electron . --selftest",
+    "spike-rt": "electron spike-rt-port.cjs"
+  },
+  "dependencies": {
+    "koffi": "^3.3.6"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
+  }
+}

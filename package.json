@@ -1,3 +1,31 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c909fe5479c1be9d553b2533de11accc6a70f37077e585b392cf6107f0c3cb25
-size 874
+{
+  "name": "opendaw",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "node --test src/ desktop/scan.test.cjs",
+    "app": "npm run build && npm --prefix desktop start",
+    "app:test": "npm run build && npm --prefix desktop run selftest",
+    "app:exe": "npm run build && node desktop/build-app.cjs",
+    "deploy": "vite build && gh-pages -d dist"
+  },
+  "dependencies": {
+    "@breezystack/lamejs": "^1.2.7",
+    "neural-amp-modeler-wasm": "^3.0.7",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "oxlint": "^1.89.0",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.5"
+  }
+}
