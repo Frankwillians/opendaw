@@ -1,8 +1,5 @@
 {
-  "files": [
-    "src/main.tsx",
-    "src/desktop/native.ts"
-  ],
+  "files": [],
   "references": [
     {
       "path": "./tsconfig.app.json"

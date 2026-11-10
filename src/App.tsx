@@ -239,7 +239,9 @@ interface TrackState {
   nativeChain: NativeVstSlot[]
   chain: string[]
   fxRack: BuiltinFxRack
+  /** @deprecated Use clips array instead. Kept for backward compatibility. */
   clipStart: number
+  /** @deprecated Use clips array instead. Kept for backward compatibility. */
   clipDuration: number
   // Edge fades in seconds, dragged on the clip corners.
   fadeIn: number
@@ -248,8 +250,12 @@ interface TrackState {
   automation: AutomationBreakpoint[]
   // How the fader behaves during playback: read the lane, or paint into it.
   autoMode: AutoMode
+  /** @deprecated Use clips array instead. Kept for backward compatibility. */
   clipName: string
+  /** @deprecated Use clips array instead. Kept for backward compatibility. */
   bufferId: string
+  /** Multiple clips on this track's timeline (Reaper-style items). */
+  clips: Clip[]
   kind: 'audio' | 'instrument'
   instrument: InstrumentKind
   midiNotes: InstrumentNote[]
@@ -333,6 +339,18 @@ interface AudioTake {
   duration: number
   fadeIn: number
   fadeOut: number
+}
+
+/** A clip on a track's timeline (Reaper-style items). */
+interface Clip {
+  id: string
+  bufferId: string
+  clipStart: number
+  clipDuration: number
+  clipName: string
+  fadeIn: number
+  fadeOut: number
+  takes: AudioTake[]
 }
 
 /** One rendered row: a track (or folder header) plus its visual nesting. */
@@ -1309,6 +1327,25 @@ function sanitizeTakes(raw: unknown): AudioTake[] {
   return shelf.slice(-MAX_TAKES)
 }
 
+/** Clip sanitization for multi-clip per track (Reaper-style items). */
+function sanitizeClip(raw: unknown): Clip {
+  if (!raw || typeof raw !== 'object') return null as unknown as Clip
+  const c = raw as Record<string, unknown>
+  const id = typeof c.id === 'string' ? c.id : crypto.randomUUID()
+  const bufferId = typeof c.bufferId === 'string' ? c.bufferId : ''
+  if (!bufferId) return null as unknown as Clip
+  return {
+    id,
+    bufferId,
+    clipStart: Number.isFinite(c.clipStart) ? Math.max(0, Number(c.clipStart)) : 0,
+    clipDuration: Number.isFinite(c.clipDuration) ? Math.max(0.05, Number(c.clipDuration)) : 0,
+    clipName: typeof c.clipName === 'string' ? c.clipName : 'Clip',
+    fadeIn: Number.isFinite(c.fadeIn) ? Math.max(0, Number(c.fadeIn)) : 0.005,
+    fadeOut: Number.isFinite(c.fadeOut) ? Math.max(0, Number(c.fadeOut)) : 0.005,
+    takes: sanitizeTakes(c.takes),
+  }
+}
+
 /**
  * What the panel shows about one lane's live plugin: that it is in the signal,
  * how much delay it adds, how much of the audio it managed to keep up with, and
@@ -1533,6 +1570,7 @@ function sanitizeTrack(track: Partial<TrackState>, index: number): TrackState {
     collapsed: Boolean(track.collapsed),
     folderId: typeof track.folderId === 'string' && track.folderId ? track.folderId : null,
     takes: sanitizeTakes(track.takes),
+    clips: track.clips ? track.clips.map(sanitizeClip) : [],
     groupId: typeof track.groupId === 'string' ? track.groupId : '',
     duckSourceIds: readDuckSources(track),
     duckDepth: clampNumber(track.duckDepth, 0, 1, 0.7),
@@ -1913,11 +1951,14 @@ function slugify(name: string): string {
     .replace(/(^-|-$)/g, '')
 }
 
-function Waveform({ peaks, color }: { peaks: number[]; color: string }) {
-  const width = Math.max(peaks.length, 1)
+function Waveform({ peaks, color }: { peaks?: number[]; color: string }) {
+  // O restore do IndexedDB é assíncrono: o clipe já pode estar na tela antes
+  // dos picos chegarem. Sem a guarda, reabrir o projeto derrubava o app inteiro.
+  const data = peaks ?? []
+  const width = Math.max(data.length, 1)
   return (
     <svg className="waveform" viewBox={`0 0 ${width} 100`} preserveAspectRatio="none">
-      {peaks.map((peak, index) => {
+      {data.map((peak, index) => {
         const height = Math.min(Math.max(2, peak * 96 * 2), 96)
         return (
           <rect
@@ -2143,14 +2184,15 @@ export default function App() {
    * recording guards, but this one flips only inside the selected region.
    */
   const takeOpenRef = useRef(false)
-  const scrubActiveRef = useRef(false)
   const dragChainKeyRef = useRef<string | null>(null)
   const dragTrackIdRef = useRef<string | null>(null)
   // In-memory audio clipboard: WAV bytes of a copied clip, ready to paste.
   const audioClipboardRef = useRef<{ blob: Blob; name: string; duration: number } | null>(null)
-  const clipDragRef = useRef<{ trackId: string; startX: number; startStep: number; pxPerStep: number } | null>(
+  const clipDragRef = useRef<{ trackId: string; clipId?: string; startX: number; startStep: number; pxPerStep: number; lastStart: number } | null>(
     null,
   )
+  // Lane destacada enquanto um clipe é arrastado por cima dela.
+  const [clipDropTarget, setClipDropTarget] = useState<string | null>(null)
   // In-memory MIDI clipboard: the pattern of a copied instrument clip.
   const midiClipboardRef = useRef<{
     notes: InstrumentNote[]
@@ -2362,7 +2404,6 @@ export default function App() {
   const [midiEditorId, setMidiEditorId] = useState<string | null>(null)
   const [midiNoteLen, setMidiNoteLen] = useState(2)
   const [editingMarkerId, setEditingMarkerId] = useState<string | null>(null)
-  const [scrubGhost, setScrubGhost] = useState<number | null>(null)
   const [dragOverKey, setDragOverKey] = useState<string | null>(null)
   const [dragOverTrackId, setDragOverTrackId] = useState<string | null>(null)
   // Right-click menu inside the arrangement lanes (copy / cut / paste / trim).
@@ -2371,6 +2412,7 @@ export default function App() {
     y: number
     trackId: string
     step: number
+    clipId?: string
   } | null>(null)
   // Right-click on the track's own panel. Everything that used to sit under the
   // faders as four rows of small buttons lives here now, plus the keyboard.
@@ -2411,6 +2453,9 @@ export default function App() {
   const midiPendingRef = useRef<
     Map<string, { trackId: string; pitch: number; step: number; velocity: number }>
   >(new Map())
+  // Nota melódica ao vivo (teclado do PC ou MIDI externo) ainda soando: o
+  // note-off precisa saber em que track a voz foi acesa para dar o release.
+  const liveHeldRef = useRef<Map<number, string>>(new Map())
   // Playing the selected instrument with the computer keyboard, for anyone
   // without a MIDI interface. Off by default so it cannot eat the shortcuts.
   const [pcKeys, setPcKeys] = useState(false)
@@ -2420,7 +2465,7 @@ export default function App() {
   const [pcHeldPieces, setPcHeldPieces] = useState<number[]>([])
   const pcKeysRef = useRef(false)
   const pcOctaveRef = useRef(0)
-  const pcHeldRef = useRef<Map<string, number>>(new Map())
+  const pcHeldRef = useRef<Map<string, { pitch: number; trackId: string }>>(new Map())
   const pcPieceTimersRef = useRef<Map<number, number>>(new Map())
   // The global key handler is mounted once, so it reaches the live closures
   // through these.
@@ -2566,6 +2611,7 @@ export default function App() {
     autoMode: 'read',
     clipName: '',
     bufferId: '',
+    clips: [],
     takes: [],
     kind,
     instrument,
@@ -2641,6 +2687,33 @@ export default function App() {
     }
   }
 
+  /**
+   * O estado do projeto é a fonte da verdade dos clipes: cada sync reconcilia
+   * o engine por id (upsert com buffer nulo preserva a amostra já carregada;
+   * clipes que só existem no engine somem). Sem isso, mover/apagar um clipe na
+   * UI deixaria o engine tocando a versão antiga.
+   */
+  const syncClipsToEngine = (track: TrackState) => {
+    const engine = engineRef.current
+    if (!engine || track.isFolder || !engine.hasTrack(track.id)) return
+    const clips = track.clips ?? []
+    const wanted = new Set(clips.map((clip) => clip.id))
+    for (const clipId of engine.getClipIds(track.id)) {
+      if (!wanted.has(clipId)) engine.removeClip(track.id, clipId)
+    }
+    for (const clip of clips) {
+      engine.upsertClip(track.id, {
+        id: clip.id,
+        buffer: null,
+        bufferLabel: clip.bufferId,
+        clipStart: clip.clipStart,
+        clipDuration: clip.clipDuration,
+        fadeIn: clip.fadeIn,
+        fadeOut: clip.fadeOut,
+      })
+    }
+  }
+
   const syncTrackToEngine = (track: TrackState) => {
     const engine = engineRef.current
     if (!engine) return
@@ -2681,6 +2754,7 @@ export default function App() {
     engine.setClipStart(track.id, track.clipStart)
     engine.setClipDuration(track.id, track.clipDuration)
     engine.setClipFade(track.id, track.fadeIn, track.fadeOut)
+    syncClipsToEngine(track)
     engine.setAutomation(track.id, track.automation)
     for (const fxId of BUILTIN_FX_IDS) engine.setBuiltinFx(track.id, fxId, track.fxRack[fxId])
     engine.setChainOrder(track.id, track.chain)
@@ -2762,6 +2836,44 @@ export default function App() {
             item.id === track.id ? { ...item, clipDuration: duration } : item,
           ),
         )
+        // Multi-clipe: cada item da lane tem o próprio arquivo no IndexedDB.
+        // O legado acima já decodificou o último; os demais vêm agora, e o
+        // engine recebe cada um pelo id que o projeto salvo já conhece.
+        const storedClips = tracksRef.current.find((item) => item.id === track.id)?.clips ?? []
+        for (const clip of storedClips) {
+          if (!clip.bufferId) continue
+          try {
+            let clipBuffer = clip.bufferId === bufferId ? buffer : null
+            if (!clipBuffer) {
+              const clipBlob = await loadSample(clip.bufferId)
+              if (!clipBlob) continue
+              clipBuffer = await engine.ctx.decodeAudioData(await clipBlob.arrayBuffer())
+            }
+            const aliveClip = tracksRef.current
+              .find((item) => item.id === track.id)
+              ?.clips.some((c) => c.id === clip.id && c.bufferId === clip.bufferId)
+            if (!aliveClip) continue
+            const clipDur =
+              clip.clipDuration > 0
+                ? Math.min(clip.clipDuration, clipBuffer.duration)
+                : clipBuffer.duration
+            engine.upsertClip(track.id, {
+              id: clip.id,
+              buffer: clipBuffer,
+              bufferLabel: clip.bufferId,
+              clipStart: clip.clipStart,
+              clipDuration: clipDur,
+              fadeIn: clip.fadeIn,
+              fadeOut: clip.fadeOut,
+            })
+            const clipRatio = Math.min(1, clipDur / Math.max(clipBuffer.duration, 0.0001))
+            const clipPeaks = computePeaks(clipBuffer).slice(0, Math.max(1, Math.round(260 * clipRatio)))
+            setPeaks((prev) => ({ ...prev, [clip.id]: clipPeaks }))
+          } catch {
+            // Amostra podada ou indecodável: o clipe fica na lane, silencioso,
+            // e pode ser removido pelo menu — melhor que sumir com o projeto.
+          }
+        }
       })().catch(() => {
         // The sample was pruned or cannot be decoded: drop the stale clip.
         commitTracks(
@@ -3648,13 +3760,19 @@ export default function App() {
         if (isRecordingRef.current) continue
         if (nextStepRef.current < totalSteps) continue
 
+        // Check if we should loop a selection instead of the whole arrangement
+        const timeSel = timeSelRef.current
+        const selectionLoop = loopRef.current && timeSel !== null && timeSel.to > timeSel.from
+        const loopEndStep = selectionLoop ? timeSel!.to : totalSteps
+        const loopStartStep = selectionLoop ? timeSel!.from : 0
+
         if (loopRef.current) {
-          nextStepRef.current = 0
-          // Stop the previous pass first so a clip longer than the arrangement
+          nextStepRef.current = loopStartStep
+          // Stop the previous pass first so a clip longer than the loop region
           // cannot overlap the next loop iteration. The lanes keep their state:
           // this stop is only the other half of an immediate restart.
           engine.stopBuffers(true)
-          engine.startBuffersAt(nextTimeRef.current, stepDuration, 0)
+          engine.startBuffersAt(nextTimeRef.current, stepDuration, loopStartStep)
         } else {
           const stopDelay = (nextTimeRef.current - engine.ctx.currentTime) * 1000
           nextStepRef.current = 0
@@ -3714,7 +3832,16 @@ export default function App() {
         }
       } else if (loopRef.current) {
         const totalSteps = Math.max(1, arrangementBarsRef.current * STEP_COUNT)
-        position = ((position % totalSteps) + totalSteps) % totalSteps
+        const timeSel = timeSelRef.current
+        const selectionLoop = timeSel !== null && timeSel.to > timeSel.from
+        const loopEndStep = selectionLoop ? timeSel!.to : totalSteps
+        const loopStartStep = selectionLoop ? timeSel!.from : 0
+        const loopLength = loopEndStep - loopStartStep
+        if (loopLength > 0) {
+          position = loopStartStep + ((position - loopStartStep) % loopLength + loopLength) % loopLength
+        } else {
+          position = ((position % totalSteps) + totalSteps) % totalSteps
+        }
       }
 
       const totalSteps = Math.max(1, arrangementBarsRef.current * STEP_COUNT)
@@ -3752,7 +3879,15 @@ export default function App() {
 
   const removeTrack = (id: string) => {
     const target = tracksRef.current.find((track) => track.id === id)
-    if (target?.bufferId) reclaimSample(target.bufferId)
+    if (target) {
+      if (target.bufferId) reclaimSample(target.bufferId)
+      // Cada clipe da lane é dono do próprio arquivo; apagar a track sem
+      // recolhê-los deixaria WAVs órfãos no IndexedDB para sempre.
+      for (const clip of target.clips ?? []) {
+        if (clip.bufferId) reclaimSample(clip.bufferId)
+        for (const take of clip.takes ?? []) reclaimSample(take.id)
+      }
+    }
     if (target?.callChannelKey) {
       // Uma faixa de chamada é dona de dois plugs: o stream que ela imprime e o
       // retorno que ela escuta. Apagar a faixa sem soltar os dois deixaria a sala
@@ -3774,6 +3909,7 @@ export default function App() {
     setPeaks((prev) => {
       const copy = { ...prev }
       delete copy[id]
+      for (const clip of target?.clips ?? []) delete copy[clip.id]
       return copy
     })
     if (fxTrackId === id) setFxTrackId(null)
@@ -3806,6 +3942,7 @@ export default function App() {
       clipDuration: 0,
       clipName: '',
       bufferId: '',
+      clips: [],
     }
     syncTrackToEngine(copy)
     const next = [...tracksRef.current, copy]
@@ -6986,24 +7123,32 @@ export default function App() {
 
   const clearClip = (id: string) => {
     const target = tracksRef.current.find((track) => track.id === id)
-    if (target?.bufferId) reclaimSample(target.bufferId)
-    // Deleting the clip means deleting the performance, shelf included.
-    for (const take of target?.takes ?? []) reclaimSample(take.id)
+    if (!target) return
+    // Reclaim all clip buffers
+    for (const clip of target.clips) {
+      if (clip.bufferId) reclaimSample(clip.bufferId)
+      for (const take of clip.takes) reclaimSample(take.id)
+    }
+    // Also reclaim legacy single clip fields
+    if (target.bufferId) reclaimSample(target.bufferId)
+    for (const take of target.takes ?? []) reclaimSample(take.id)
+    for (const clip of target.clips) engineRef.current?.removeClip(id, clip.id)
     engineRef.current?.setBuffer(id, null)
     engineRef.current?.setClipStart(id, 0)
     setPeaks((prev) => {
       const copy = { ...prev }
       delete copy[id]
+      for (const clip of target.clips) delete copy[clip.id]
       return copy
     })
     commitTracks(
       tracksRef.current.map((track) =>
         track.id === id
-          ? { ...track, clipStart: 0, clipDuration: 0, clipName: '', bufferId: '', takes: [] }
+          ? { ...track, clips: [], clipStart: 0, clipDuration: 0, clipName: '', bufferId: '', takes: [] }
           : track,
       ),
     )
-    notify('Clipe removido')
+    notify('Clipe(s) removido(s)')
   }
 
   // --------------------------------------------------- audio clip clipboard
@@ -7033,17 +7178,65 @@ export default function App() {
       notify('Essa track ainda não tem áudio gravado')
       return
     }
-    const blob = await loadSample(track.bufferId)
-    if (!blob) {
-      notify('Amostra não encontrada — recarregue o projeto')
-      return
+    const engine = engineRef.current
+    if (!engine) return
+
+    // Check for time selection
+    const timeSel = timeSelRef.current
+    let blob: Blob
+    let name = track.clipName || track.name
+    let duration = track.clipDuration
+
+    if (timeSel && timeSel.to > timeSel.from) {
+      const stepDuration = 60 / bpmRef.current / 4
+      const clipStartStep = track.clipStart
+      const clipEndStep = clipStartStep + track.clipDuration / stepDuration
+      const selStart = Math.max(timeSel.from, clipStartStep)
+      const selEnd = Math.min(timeSel.to, clipEndStep)
+
+      if (selEnd > selStart) {
+        // Time selection overlaps with clip - copy only the selected portion
+        const startSec = (selStart - clipStartStep) * stepDuration
+        const endSec = (selEnd - clipStartStep) * stepDuration
+        const sliced = engine.sliceBuffer(track.id, startSec, endSec)
+        if (sliced) {
+          const arrayBuffer = await encodeWav(sliced)
+          blob = new Blob([arrayBuffer], { type: 'audio/wav' })
+          duration = sliced.duration
+          notify(`Seleção de áudio copiada (${duration.toFixed(1)}s)`)
+        } else {
+          // Fallback to full clip
+          const fullBlob = await loadSample(track.bufferId)
+          if (!fullBlob) {
+            notify('Amostra não encontrada — recarregue o projeto')
+            return
+          }
+          blob = fullBlob
+        }
+      } else {
+        // No overlap - copy full clip
+        const fullBlob = await loadSample(track.bufferId)
+        if (!fullBlob) {
+          notify('Amostra não encontrada — recarregue o projeto')
+          return
+        }
+        blob = fullBlob
+      }
+    } else {
+      // No time selection - copy full clip
+      const fullBlob = await loadSample(track.bufferId)
+      if (!fullBlob) {
+        notify('Amostra não encontrada — recarregue o projeto')
+        return
+      }
+      blob = fullBlob
     }
+
     audioClipboardRef.current = {
       blob,
-      name: track.clipName || track.name,
-      duration: track.clipDuration,
+      name,
+      duration,
     }
-    notify(`Áudio de "${track.name}" copiado (${track.clipDuration.toFixed(1)}s)`)
   }
 
   const cutAudioClip = async (trackId?: string) => {
@@ -7052,38 +7245,174 @@ export default function App() {
       await copyAudioClip(trackId)
       return
     }
-    const blob = await loadSample(track.bufferId)
-    if (!blob) {
-      notify('Amostra não encontrada — nada foi cortado')
-      return
+    const engine = engineRef.current
+    if (!engine) return
+
+    // Check for time selection
+    const timeSel = timeSelRef.current
+    let blob: Blob
+    let name = track.clipName || track.name
+    let duration = track.clipDuration
+
+    if (timeSel && timeSel.to > timeSel.from) {
+      const stepDuration = 60 / bpmRef.current / 4
+      const clipStartStep = track.clipStart
+      const clipEndStep = clipStartStep + track.clipDuration / stepDuration
+      const selStart = Math.max(timeSel.from, clipStartStep)
+      const selEnd = Math.min(timeSel.to, clipEndStep)
+
+      if (selEnd > selStart) {
+        // Time selection overlaps with clip - cut the selected portion
+        const startSec = (selStart - clipStartStep) * stepDuration
+        const endSec = (selEnd - clipStartStep) * stepDuration
+
+        // Copy the selected portion to clipboard
+        const sliced = engine.sliceBuffer(track.id, startSec, endSec)
+        if (sliced) {
+          const arrayBuffer = await encodeWav(sliced)
+          blob = new Blob([arrayBuffer], { type: 'audio/wav' })
+          duration = sliced.duration
+
+          // Trim the original clip to remove the selected portion
+          // Keep the part before the selection (left side)
+          if (startSec > 0.05) {
+            // There's content before the selection - trim clip to end at selection start
+            engine.setClipDuration(track.id, startSec)
+            patchTrack(track.id, { clipDuration: startSec })
+            notify(`Seleção cortada, mantido início do clipe (${startSec.toFixed(1)}s)`)
+          } else if (endSec < track.clipDuration - 0.05) {
+            // Selection is at the start, keep the tail
+            const tail = engine.sliceBuffer(track.id, endSec, track.clipDuration)
+            if (tail) {
+              const tailBufferId = newId()
+              void saveSample(tailBufferId, encodeWav(tail))
+              engine.setBuffer(track.id, tail, tailBufferId)
+              engine.setClipStart(track.id, track.clipStart + Math.round(endSec / stepDuration))
+              setPeaks((prev) => ({ ...prev, [track.id]: computePeaks(tail) }))
+              commitTracks(
+                tracksRef.current.map((t) =>
+                  t.id === track.id
+                    ? { ...t, clipStart: track.clipStart + Math.round(endSec / stepDuration), clipDuration: tail.duration, clipName: name, bufferId: tailBufferId }
+                    : t,
+                ),
+              )
+              notify(`Seleção cortada, mantido final do clipe (${tail.duration.toFixed(1)}s)`)
+            } else {
+              clearClip(track.id)
+              notify(`Seleção cortada, clipe removido`)
+            }
+          } else {
+            // Selection covers entire clip or nearly so
+            clearClip(track.id)
+            notify(`Seleção cortada, clipe removido`)
+          }
+        } else {
+          // Fallback to full clip
+          const fullBlob = await loadSample(track.bufferId)
+          if (!fullBlob) {
+            notify('Amostra não encontrada — nada foi cortado')
+            return
+          }
+          blob = fullBlob
+          clearClip(track.id)
+        }
+      } else {
+        // No overlap - cut full clip (current behavior)
+        const fullBlob = await loadSample(track.bufferId)
+        if (!fullBlob) {
+          notify('Amostra não encontrada — nada foi cortado')
+          return
+        }
+        blob = fullBlob
+        clearClip(track.id)
+        notify(`Áudio de "${track.name}" cortado`)
+      }
+    } else {
+      // No time selection - cut full clip (current behavior)
+      const fullBlob = await loadSample(track.bufferId)
+      if (!fullBlob) {
+        notify('Amostra não encontrada — nada foi cortado')
+        return
+      }
+      blob = fullBlob
+      clearClip(track.id)
+      notify(`Áudio de "${track.name}" cortado`)
     }
+
     audioClipboardRef.current = {
       blob,
-      name: track.clipName || track.name,
-      duration: track.clipDuration,
+      name,
+      duration,
     }
-    clearClip(track.id)
-    notify(`Áudio de "${track.name}" cortado`)
   }
 
   // Applies a decoded buffer to a track and persists it under a fresh id.
   const applyClipBuffer = (trackId: string, buffer: AudioBuffer, name: string, startStep: number) => {
     const engine = engineRef.current
     if (!engine) return
-    const previousId = tracksRef.current.find((track) => track.id === trackId)?.bufferId
-    if (previousId) reclaimSample(previousId)
     const bufferId = newId()
     void saveSample(bufferId, encodeWav(buffer))
-    engine.setBuffer(trackId, buffer, bufferId)
-    engine.setClipStart(trackId, startStep)
-    setPeaks((prev) => ({ ...prev, [trackId]: computePeaks(buffer) }))
+    // O mesmo id no estado e no engine: arrastar, aparar e remover um clipe
+    // específico depende de os dois lados falarem do mesmo item.
+    const newClip: Clip = {
+      id: newId(),
+      bufferId,
+      clipStart: startStep,
+      clipDuration: buffer.duration,
+      clipName: name,
+      fadeIn: 0.005,
+      fadeOut: 0.005,
+      takes: [],
+    }
+    engine.addClip(trackId, {
+      buffer,
+      bufferLabel: bufferId,
+      clipStart: startStep,
+      clipDuration: buffer.duration,
+      fadeIn: 0.005,
+      fadeOut: 0.005,
+    }, newClip.id)
+    const clipPeaks = computePeaks(buffer)
+    setPeaks((prev) => ({ ...prev, [trackId]: clipPeaks, [newClip.id]: clipPeaks }))
     commitTracks(
       tracksRef.current.map((track) =>
         track.id === trackId
-          ? { ...track, clipStart: startStep, clipDuration: buffer.duration, clipName: name, bufferId }
+          ? { ...track, clips: [...(track.clips ?? []), newClip], clipStart: startStep, clipDuration: buffer.duration, clipName: name, bufferId }
           : track,
       ),
     )
+  }
+
+  /** Remove um clipe específico da lane, sem tocar nos irmãos. */
+  const removeClipById = (trackId: string, clipId: string) => {
+    const track = tracksRef.current.find((item) => item.id === trackId)
+    const clip = track?.clips.find((item) => item.id === clipId)
+    if (!track || !clip) return
+    if (clip.bufferId) reclaimSample(clip.bufferId)
+    for (const take of clip.takes ?? []) reclaimSample(take.id)
+    engineRef.current?.removeClip(trackId, clipId)
+    setPeaks((prev) => {
+      const copy = { ...prev }
+      delete copy[clipId]
+      return copy
+    })
+    const remaining = track.clips.filter((item) => item.id !== clipId)
+    const last = remaining[remaining.length - 1]
+    commitTracks(
+      tracksRef.current.map((item) =>
+        item.id === trackId
+          ? {
+              ...item,
+              clips: remaining,
+              clipStart: last?.clipStart ?? 0,
+              clipDuration: last?.clipDuration ?? 0,
+              clipName: last?.clipName ?? '',
+              bufferId: last?.bufferId ?? '',
+            }
+          : item,
+      ),
+    )
+    notify(`Clipe "${clip.clipName || 'sem nome'}" removido`)
   }
 
   const pasteAudioClip = async (preferredTrackId?: string, atStep?: number) => {
@@ -7109,13 +7438,15 @@ export default function App() {
         ) ?? null
       : null
     const target = explicit ?? selectedAudioTrack()
-    // Explicit target always receives the clip; otherwise prefer an empty
-    // selected audio track and fall back to creating a fresh one.
-    if (target && (explicit || !target.bufferId || target.clipDuration <= 0)) {
+
+    // Reaper-style: paste at playhead position on the target track
+    if (target) {
       applyClipBuffer(target.id, buffer, clip.name, startStep)
-      notify(`Colado em "${target.name}"`)
+      notify(`Colado em "${target.name}" na posição do playhead`)
       return
     }
+
+    // No target track - create a new one
     const copy: TrackState = {
       ...makeTrack(tracksRef.current.length, undefined, 'audio'),
       name: `${clip.name || 'Áudio'} (colar)`,
@@ -7503,23 +7834,103 @@ export default function App() {
       notify('Essa track ainda não tem pattern')
       return false
     }
+
+    // Check for time selection
+    const timeSel = timeSelRef.current
+    let notesToCopy: InstrumentNote[]
     let start = Infinity
-    for (const note of track.midiNotes) start = Math.min(start, note.step)
+
+    if (timeSel && timeSel.to > timeSel.from && track.patternSteps > 0) {
+      // Pattern loops - find notes that fall within the time selection across all loops
+      const patternLength = track.patternSteps
+      const selStart = timeSel.from
+      const selEnd = timeSel.to
+
+      // Collect all notes from all pattern repetitions that fall within selection
+      const allNotes: InstrumentNote[] = []
+      const maxLoops = Math.ceil((selEnd - (track.midiNotes.length > 0 ? track.midiNotes[0].step : 0)) / patternLength) + 2
+
+      for (let loop = 0; loop < maxLoops; loop++) {
+        const loopOffset = loop * patternLength
+        for (const note of track.midiNotes) {
+          const absStep = note.step + loopOffset
+          if (absStep >= selStart && absStep < selEnd) {
+            allNotes.push({ ...note, step: absStep })
+          }
+        }
+      }
+
+      if (allNotes.length > 0) {
+        // Normalize to start at 0 for clipboard
+        let minStep = Infinity
+        for (const note of allNotes) minStep = Math.min(minStep, note.step)
+        notesToCopy = allNotes.map((note) => ({ ...note, step: note.step - minStep }))
+        start = minStep
+      } else {
+        // No notes in selection - fall back to full pattern
+        for (const note of track.midiNotes) start = Math.min(start, note.step)
+        notesToCopy = track.midiNotes.map((note) => ({ ...note, step: note.step - start }))
+      }
+    } else {
+      // No time selection or no pattern - copy full pattern
+      for (const note of track.midiNotes) start = Math.min(start, note.step)
+      notesToCopy = track.midiNotes.map((note) => ({ ...note, step: note.step - start }))
+    }
+
     midiClipboardRef.current = {
-      // Relative to the pattern start so a paste can reposition it freely.
-      notes: track.midiNotes.map((note) => ({ ...note, step: note.step - start })),
+      notes: notesToCopy,
       instrument: track.instrument,
       name: track.name,
     }
-    notify(`Pattern de "${track.name}" copiado (${track.midiNotes.length} nota(s))`)
+    notify(`Pattern de "${track.name}" copiado (${notesToCopy.length} nota(s))`)
     return true
   }
 
   const cutMidiPattern = (trackId?: string): void => {
     const track = resolveMidiTrack(trackId)
-    if (!copyMidiPattern(trackId) || !track) return
-    clearNotes(track.id)
-    notify(`Pattern de "${track.name}" cortado`)
+    if (!track) return
+
+    // Check for time selection
+    const timeSel = timeSelRef.current
+    if (timeSel && timeSel.to > timeSel.from && track.patternSteps > 0) {
+      const patternLength = track.patternSteps
+      const selStart = timeSel.from
+      const selEnd = timeSel.to
+
+      // Remove notes that fall within the time selection across all loops
+      const remainingNotes: InstrumentNote[] = []
+      const maxLoops = Math.ceil((selEnd - (track.midiNotes.length > 0 ? track.midiNotes[0].step : 0)) / patternLength) + 2
+
+      for (let loop = 0; loop < maxLoops; loop++) {
+        const loopOffset = loop * patternLength
+        for (const note of track.midiNotes) {
+          const absStep = note.step + loopOffset
+          if (absStep < selStart || absStep >= selEnd) {
+            // Keep this note - map it back to pattern-relative position
+            const patternStep = ((absStep % patternLength) + patternLength) % patternLength
+            remainingNotes.push({ ...note, step: patternStep })
+          }
+        }
+      }
+
+      // Deduplicate notes that might have been added multiple times from different loops
+      const uniqueNotes = new Map<string, InstrumentNote>()
+      for (const note of remainingNotes) {
+        const key = `${note.step}:${note.pitch}:${note.channel}`
+        if (!uniqueNotes.has(key)) {
+          uniqueNotes.set(key, note)
+        }
+      }
+
+      setMidiNotes(track.id, Array.from(uniqueNotes.values()))
+      notify(`Seleção do pattern cortada (${uniqueNotes.size} nota(s) restantes)`)
+    } else {
+      // No time selection - cut full pattern (current behavior)
+      if (copyMidiPattern(trackId)) {
+        clearNotes(track.id)
+        notify(`Pattern de "${track.name}" cortado`)
+      }
+    }
   }
 
   const pasteMidiPattern = (preferredTrackId?: string, atStep?: number): void => {
@@ -7534,11 +7945,15 @@ export default function App() {
       ? tracksRef.current.find((item) => item.id === preferredTrackId) ?? null
       : null
     const target = explicit ?? resolveMidiTrack()
-    if (target && target.kind === 'instrument' && (explicit || target.midiNotes.length === 0)) {
-      setMidiNotes(target.id, notes)
-      notify(`Pattern colado em "${target.name}"`)
+
+    // Reaper-style: paste at playhead position, adding notes to existing ones
+    if (target && target.kind === 'instrument') {
+      const allNotes = [...target.midiNotes, ...notes]
+      setMidiNotes(target.id, allNotes)
+      notify(`Pattern colado em "${target.name}" na posição do playhead`)
       return
     }
+
     const copy: TrackState = {
       ...makeTrack(tracksRef.current.length, undefined, 'instrument', clip.instrument),
       name: `${clip.name || 'MIDI'} (colar)`,
@@ -7559,57 +7974,142 @@ export default function App() {
 
   // ------------------------------------------------------- clip trim (edge)
 
-  const trimClipEnd = (trackId: string, seconds: number): void => {
+  const trimClipEnd = (trackId: string, seconds: number, clipId?: string): void => {
     const engine = engineRef.current
     if (!engine) return
-    const max = engine.getBufferDuration(trackId)
-    if (max <= 0) return
-    const value = Math.max(0.05, Math.min(max, seconds))
-    engine.setClipDuration(trackId, value)
-    patchTrack(trackId, { clipDuration: value })
+    const track = tracksRef.current.find((t) => t.id === trackId)
+    if (!track) return
+
+    if (clipId) {
+      // Multi-clipe: apara só o item clicado, contra a amostra dele.
+      const clip = track.clips?.find((c) => c.id === clipId)
+      if (!clip) return
+      const max = engine.getClip(trackId, clipId)?.buffer?.duration ?? engine.getBufferDuration(trackId)
+      if (max <= 0) return
+      const value = Math.max(0.05, Math.min(max, seconds))
+      engine.setClipDurationFor(trackId, clipId, value)
+      commitTracks(
+        tracksRef.current.map((t) =>
+          t.id === trackId
+            ? { ...t, clips: t.clips.map((c) => c.id === clipId ? { ...c, clipDuration: value } : c) }
+            : t,
+        ),
+      )
+    } else {
+      // Legacy: trim track's single clip
+      const max = engine.getBufferDuration(trackId)
+      if (max <= 0) return
+      const value = Math.max(0.05, Math.min(max, seconds))
+      engine.setClipDuration(trackId, value)
+      patchTrack(trackId, { clipDuration: value })
+    }
   }
 
   /**
-   * Razor. A lane carries one take, so the cut keeps the head where it is and
-   * puts the tail on a fresh lane right below — same folder, same colour, and
-   * both pieces stay exactly on the grid where the audio already was. Returns
-   * the new lane's id, or null when the cut point misses the clip.
+   * Razor. O corte mantém as duas metades NA MESMA lane, como item do REAPER:
+   * a cabeça fica onde estava, aparada no ponto, e a cauda vira um clipe novo
+   * colado nela, com o próprio arquivo. Tracks antigas (um clipe legado) são
+   * materializadas na lista de clipes antes do corte. Retorna o id do clipe
+   * cauda, ou null quando o ponto não cai dentro de nenhum clipe.
    */
   const splitTakeAt = (trackId: string, atStep: number): string | null => {
     const engine = engineRef.current
-    const list = tracksRef.current
-    const index = list.findIndex((track) => track.id === trackId)
-    const track = index >= 0 ? list[index] : null
-    if (!engine || !track || track.kind !== 'audio' || !track.bufferId) return null
+    const track = tracksRef.current.find((item) => item.id === trackId)
+    if (!engine || !track || track.kind !== 'audio') return null
     const stepDuration = 60 / bpm / 4
-    const cut = (atStep - track.clipStart) * stepDuration
-    if (cut < 0.02 || cut > track.clipDuration - 0.02) return null
-    const tail = engine.sliceBuffer(track.id, cut, track.clipDuration)
-    if (!tail) return null
-    // Head first: shrinking is what makes room for the tail to sit next to it.
-    engine.setClipDuration(track.id, cut)
-    const copy: TrackState = {
-      ...makeTrack(list.length, undefined, 'audio'),
-      name: `${track.clipName || track.name} (parte 2)`,
-      color: track.color,
-      folderId: track.folderId,
+    let clips = track.clips ?? []
+    if (clips.length === 0) {
+      if (!track.bufferId || track.clipDuration <= 0) return null
+      const legacy: Clip = {
+        id: newId(),
+        bufferId: track.bufferId,
+        clipStart: track.clipStart,
+        clipDuration: track.clipDuration,
+        clipName: track.clipName,
+        fadeIn: track.fadeIn,
+        fadeOut: track.fadeOut,
+        takes: track.takes ?? [],
+      }
+      clips = [legacy]
+      engine.upsertClip(trackId, {
+        id: legacy.id,
+        buffer: engine.getBuffer(trackId),
+        bufferLabel: legacy.bufferId,
+        clipStart: legacy.clipStart,
+        clipDuration: legacy.clipDuration,
+        fadeIn: legacy.fadeIn,
+        fadeOut: legacy.fadeOut,
+      })
+      setPeaks((prev) => {
+        const existing = prev[trackId]
+        return existing ? { ...prev, [legacy.id]: existing } : prev
+      })
     }
-    syncTrackToEngine(copy)
+    const clip = clips.find((item) => {
+      const cut = (atStep - item.clipStart) * stepDuration
+      return cut >= 0.02 && cut <= item.clipDuration - 0.02
+    })
+    if (!clip) return null
+    const cut = (atStep - clip.clipStart) * stepDuration
+    const tailBuffer = engine.sliceClipBuffer(trackId, clip.id, cut, clip.clipDuration)
+    if (!tailBuffer) return null
+    const headBuffer = engine.sliceClipBuffer(trackId, clip.id, 0, cut)
+    const tailId = newId()
+    const tailBufferId = newId()
+    void saveSample(tailBufferId, encodeWav(tailBuffer))
+    const tailClip: Clip = {
+      id: tailId,
+      bufferId: tailBufferId,
+      clipStart: atStep,
+      clipDuration: tailBuffer.duration,
+      clipName: `${clip.clipName || track.name} (parte 2)`,
+      fadeIn: 0.005,
+      fadeOut: clip.fadeOut,
+      takes: [],
+    }
+    engine.setClipDurationFor(trackId, clip.id, cut)
+    engine.addClip(trackId, {
+      buffer: tailBuffer,
+      bufferLabel: tailBufferId,
+      clipStart: atStep,
+      clipDuration: tailBuffer.duration,
+      fadeIn: 0.005,
+      fadeOut: clip.fadeOut,
+    }, tailId)
+    const headPeaks = headBuffer ? computePeaks(headBuffer) : null
+    const tailPeaks = computePeaks(tailBuffer)
+    setPeaks((prev) => ({
+      ...prev,
+      ...(headPeaks ? { [clip.id]: headPeaks } : {}),
+      [tailId]: tailPeaks,
+    }))
+    const nextClips = [
+      ...clips.map((item) =>
+        item.id === clip.id ? { ...item, clipDuration: cut, fadeOut: 0.005 } : item,
+      ),
+      tailClip,
+    ]
     commitTracks(
-      [...list.slice(0, index + 1), copy, ...list.slice(index + 1)].map((item, position) => ({
-        ...item,
-        number: position + 1,
-      })),
+      tracksRef.current.map((item) =>
+        item.id === trackId
+          ? {
+              ...item,
+              clips: nextClips,
+              clipStart: tailClip.clipStart,
+              clipDuration: tailClip.clipDuration,
+              clipName: tailClip.clipName,
+              bufferId: tailBufferId,
+            }
+          : item,
+      ),
     )
-    patchTrack(track.id, { clipDuration: cut })
-    applyClipBuffer(copy.id, tail, copy.name, track.clipStart + cut / stepDuration)
-    return copy.id
+    return tailId
   }
 
   const splitClipAt = (trackId: string, atStep: number) => {
     const track = tracksRef.current.find((item) => item.id === trackId)
     if (!track) return
-    if (track.kind !== 'audio' || !track.bufferId || track.clipDuration <= 0) {
+    if (track.kind !== 'audio' || (!track.bufferId && (track.clips?.length ?? 0) === 0)) {
       notify('Só dá para dividir uma track com áudio gravado')
       return
     }
@@ -7618,9 +8118,7 @@ export default function App() {
       notify('Posicione o ponto dentro do clipe para dividir')
       return
     }
-    const tail = tracksRef.current.find((item) => item.id === tailId)
-    setSelectedTrackId(tailId)
-    notify(`Clipe dividido em "${track.name}" e "${tail?.name ?? 'parte 2'}"`)
+    notify('Clipe dividido em dois — as metades seguem na mesma track')
   }
 
   /** Notes of the selected instrument lane that fall inside the picked range. */
@@ -7672,31 +8170,42 @@ export default function App() {
         }
         continue
       }
-      if (track.kind !== 'audio' || !track.bufferId || track.clipDuration <= 0) continue
-      const start = track.clipStart
-      const end = start + track.clipDuration / (60 / bpm / 4)
-      if (start >= from && end <= to) {
-        clearClip(track.id)
-        clearedClips += 1
-        continue
-      }
-      if (start < from && end > to) {
-        // Cut the far edge first, then the near edge: the second cut frees the
-        // middle lane, and that is the one the selection asked to empty.
-        splitTakeAt(track.id, to)
-        const middle = splitTakeAt(track.id, from)
-        if (middle) {
-          clearClip(middle)
+      if (track.kind !== 'audio') continue
+      const stepDur = 60 / bpm / 4
+      // Percorre os clipes da lane (o legado vira um item só). O corte agora é
+      // na mesma track, então o "meio" a limpar é um clipe, não uma lane nova.
+      const items =
+        (track.clips?.length ?? 0) > 0
+          ? track.clips.map((clip) => ({ id: clip.id, start: clip.clipStart, end: clip.clipStart + clip.clipDuration / stepDur }))
+          : track.bufferId && track.clipDuration > 0
+            ? [{ id: '', start: track.clipStart, end: track.clipStart + track.clipDuration / stepDur }]
+            : []
+      for (const item of items) {
+        if (item.start >= from && item.end <= to) {
+          if (item.id) removeClipById(track.id, item.id)
+          else clearClip(track.id)
           clearedClips += 1
+          continue
         }
-        continue
-      }
-      if (start < from && end > from) trimClipEnd(track.id, (from - start) * (60 / bpm / 4))
-      else if (start < to && end > to) {
-        const tail = splitTakeAt(track.id, to)
-        if (tail) {
-          clearClip(tail)
-          clearedClips += 1
+        if (item.start < from && item.end > to) {
+          // Corta a borda distante primeiro; o segundo corte cria o clipe do
+          // meio, que é exatamente o que a seleção pediu para esvaziar.
+          splitTakeAt(track.id, to)
+          const middle = splitTakeAt(track.id, from)
+          if (middle) {
+            removeClipById(track.id, middle)
+            clearedClips += 1
+          }
+          continue
+        }
+        if (item.start < from && item.end > from) {
+          trimClipEnd(track.id, (from - item.start) * stepDur, item.id || undefined)
+        } else if (item.start < to && item.end > to) {
+          const tail = splitTakeAt(track.id, to)
+          if (tail) {
+            removeClipById(track.id, tail)
+            clearedClips += 1
+          }
         }
       }
     }
@@ -7709,13 +8218,14 @@ export default function App() {
 
   const trimDragRef = useRef<{
     trackId: string
+    clipId?: string
     startX: number
     startDuration: number
     pxPerStep: number
     stepDuration: number
   } | null>(null)
 
-  const onTrimPointerDown = (event: ReactPointerEvent<HTMLDivElement>, track: TrackState) => {
+  const onTrimPointerDown = (event: ReactPointerEvent<HTMLDivElement>, track: TrackState, clipId?: string) => {
     if (event.button !== 0) return
     const lane = event.currentTarget.closest('.arrangement-lane')
     if (!lane) return
@@ -7725,11 +8235,14 @@ export default function App() {
     } catch {
       /* pointer already gone */
     }
+    const clip = clipId ? track.clips?.find((c) => c.id === clipId) : null
+    const startDuration = clip ? clip.clipDuration : track.clipDuration
     setSelectedTrackId(track.id)
     trimDragRef.current = {
       trackId: track.id,
+      clipId,
       startX: event.clientX,
-      startDuration: track.clipDuration,
+      startDuration,
       pxPerStep: Math.max(1, lane.clientWidth / totalSteps),
       stepDuration: 60 / bpm / 4,
     }
@@ -7740,7 +8253,12 @@ export default function App() {
     if (!drag) return
     const raw = (event.clientX - drag.startX) / drag.pxPerStep
     const steps = snapStep(raw, event.altKey)
-    trimClipEnd(drag.trackId, Math.max(0.05, (drag.startDuration / drag.stepDuration + steps) * drag.stepDuration))
+    const newDuration = Math.max(0.05, (drag.startDuration / drag.stepDuration + steps) * drag.stepDuration)
+    if (drag.clipId) {
+      trimClipEnd(drag.trackId, newDuration, drag.clipId)
+    } else {
+      trimClipEnd(drag.trackId, newDuration)
+    }
   }
 
   const onTrimPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -7766,6 +8284,7 @@ export default function App() {
     if (event.button !== 0) return
     if (event.shiftKey) return
     if ((event.target as HTMLElement).closest('.clip-close')) return
+    event.stopPropagation()
     const lane = event.currentTarget.closest('.arrangement-lane')
     if (!lane) return
     try {
@@ -7812,40 +8331,74 @@ export default function App() {
   const fadeDragRef = useRef<{
     edge: 'fadeIn' | 'fadeOut'
     trackId: string
+    clipId?: string
     clipLeft: number
     clipRight: number
     pxPerSecond: number
   } | null>(null)
 
   /** Length of the clip as shown on the timeline, in seconds. */
-  const clipSecondsOf = (track: TrackState): number => {
+  const clipSecondsOf = (track: TrackState, clipId?: string): number => {
+    if (clipId) {
+      const clip = track.clips?.find((c) => c.id === clipId)
+      if (clip) return clip.clipDuration
+    }
     if (track.clipDuration > 0) return track.clipDuration
     return engineRef.current?.getBufferDuration(track.id) ?? 0
   }
 
   /** How wide a fade handle looks, as a percentage of the clip. */
-  const fadePct = (track: TrackState, edge: 'fadeIn' | 'fadeOut'): number => {
-    const seconds = clipSecondsOf(track)
+  const fadePct = (track: TrackState, edge: 'fadeIn' | 'fadeOut', clipId?: string): number => {
+    const seconds = clipSecondsOf(track, clipId)
     if (seconds <= 0) return 0
-    return Math.min(50, (track[edge] / seconds) * 100)
+    const fadeValue = clipId
+      ? track.clips?.find((c) => c.id === clipId)?.[edge] ?? track[edge]
+      : track[edge]
+    return Math.min(50, (fadeValue / seconds) * 100)
   }
 
-  const setFade = (trackId: string, edge: 'fadeIn' | 'fadeOut', seconds: number): void => {
+  const setFade = (trackId: string, edge: 'fadeIn' | 'fadeOut', seconds: number, clipId?: string): void => {
     const current = tracksRef.current.find((track) => track.id === trackId)
     if (!current) return
     const max = engineRef.current?.getBufferDuration(trackId) ?? 0
     const limit = Math.max(0.005, Math.min(10, max > 0 ? max / 2 : 10))
     const value = Math.max(0, Math.min(limit, seconds))
-    const fadeIn = edge === 'fadeIn' ? value : current.fadeIn
-    const fadeOut = edge === 'fadeOut' ? value : current.fadeOut
-    engineRef.current?.setClipFade(trackId, fadeIn, fadeOut)
-    patchTrack(trackId, { fadeIn, fadeOut })
+    if (clipId) {
+      const target = current.clips?.find((c) => c.id === clipId)
+      if (!target) return
+      const fadeIn = edge === 'fadeIn' ? value : target.fadeIn
+      const fadeOut = edge === 'fadeOut' ? value : target.fadeOut
+      // O fade é do item, não da lane: o upsert preserva o buffer e grava só os
+      // fades novos no clipe certo do engine.
+      engineRef.current?.upsertClip(trackId, {
+        id: clipId,
+        buffer: null,
+        bufferLabel: target.bufferId,
+        clipStart: target.clipStart,
+        clipDuration: target.clipDuration,
+        fadeIn,
+        fadeOut,
+      })
+      commitTracks(
+        tracksRef.current.map((track) =>
+          track.id === trackId
+            ? { ...track, clips: (track.clips ?? []).map((c) => c.id === clipId ? { ...c, [edge]: value } : c) }
+            : track,
+        ),
+      )
+    } else {
+      const fadeIn = edge === 'fadeIn' ? value : current.fadeIn
+      const fadeOut = edge === 'fadeOut' ? value : current.fadeOut
+      engineRef.current?.setClipFade(trackId, fadeIn, fadeOut)
+      patchTrack(trackId, { fadeIn, fadeOut })
+    }
   }
 
   const onFadePointerDown = (
     event: ReactPointerEvent<HTMLDivElement>,
     track: TrackState,
     edge: 'fadeIn' | 'fadeOut',
+    clipId?: string,
   ) => {
     if (event.button !== 0) return
     const clip = event.currentTarget.parentElement
@@ -7858,10 +8411,11 @@ export default function App() {
       /* pointer already gone */
     }
     const rect = clip.getBoundingClientRect()
-    const seconds = Math.max(0.05, clipSecondsOf(track))
+    const seconds = Math.max(0.05, clipSecondsOf(track, clipId))
     setSelectedTrackId(track.id)
     fadeDragRef.current = {
       trackId: track.id,
+      clipId,
       edge,
       clipLeft: rect.left,
       clipRight: rect.right,
@@ -7879,7 +8433,7 @@ export default function App() {
     // A fade is a musical length too, so it lands on the same grid as clips.
     const stepDuration = 60 / bpmRef.current / 4
     const steps = snapStep(raw / stepDuration, event.altKey)
-    setFade(drag.trackId, drag.edge, steps * stepDuration)
+    setFade(drag.trackId, drag.edge, steps * stepDuration, drag.clipId)
   }
 
   const onFadePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -8053,6 +8607,12 @@ export default function App() {
     ? tracks.find((track) => track.id === clipMenu.trackId) ?? null
     : null
 
+  // Clipe específico clicado com o botão direito (undefined = lane/legado).
+  const clipMenuClip =
+    clipMenu?.clipId && clipMenuTrack
+      ? clipMenuTrack.clips.find((clip) => clip.id === clipMenu.clipId) ?? null
+      : null
+
   /**
    * Right-click on a track panel. The panel keeps only what a mixer strip really
    * needs - name, record, mute, solo, FX, input, faders, routing - and the housekeeping
@@ -8115,7 +8675,7 @@ export default function App() {
     midiLedTimerRef.current = window.setTimeout(() => setMidiLed(false), 110)
   }
 
-  const handleMidiNoteOn = (pitch: number, velocity: number, forcedTarget?: TrackState) => {
+  const handleMidiNoteOn = (pitch: number, velocity: number, forcedTarget?: TrackState, duration?: number) => {
     const engine = engineRef.current
     if (!engine) return
     // The computer keyboard resolves its own target (a folder jams its first
@@ -8123,7 +8683,12 @@ export default function App() {
     const target = forcedTarget ?? resolveMidiTarget()
     if (!target) return
     void engine.resume()
-    engine.playNote(target.id, target.instrument, pitch, velocity, engine.ctx.currentTime + 0.004, 0.4)
+    // Melódico ao vivo segura no sustain até o keyup/note-off (hold); bateria
+    // é one-shot e solta sozinha. A duração nominal só alimenta o decaimento
+    // inicial do timbre — quem manda soltar é o stopNote, não o relógio.
+    const melodic = target.instrument !== 'drums'
+    engine.playNote(target.id, target.instrument, pitch, velocity, engine.ctx.currentTime + 0.004, duration ?? 0.4, melodic)
+    if (melodic) liveHeldRef.current.set(pitch, target.id)
     pulseMidiLed()
     if (takeOpenRef.current && target.isArmed) {
       const start = Math.max(0, Math.round(songStepNow()))
@@ -8138,6 +8703,13 @@ export default function App() {
 
   const handleMidiNoteOff = (pitch: number) => {
     pulseMidiLed()
+    // O release da nota ao vivo acontece aqui: MIDI externo manda note-off,
+    // e o teclado do PC também passa por este caminho depois do stopNote dele.
+    const heldTrack = liveHeldRef.current.get(pitch)
+    if (heldTrack) {
+      liveHeldRef.current.delete(pitch)
+      engineRef.current?.stopNote(heldTrack, pitch)
+    }
     if (!isRecordingRef.current) return
     for (const [key, pending] of [...midiPendingRef.current]) {
       if (!key.endsWith(`:${pitch}`)) continue
@@ -8241,18 +8813,32 @@ export default function App() {
     }
     const semitone = PC_KEY_SEMITONES[rawKey]
     if (semitone === undefined) return
-    if (pcHeldRef.current.has(rawKey)) return
     const pitch = pcBasePitch(track) + semitone
-    pcHeldRef.current.set(rawKey, pitch)
-    setPcHeld([...pcHeldRef.current.values()])
-    handleMidiNoteOn(pitch, 0.85)
+
+    // If key is already held, stop the old note first (retrigger)
+    if (pcHeldRef.current.has(rawKey)) {
+      const oldEntry = pcHeldRef.current.get(rawKey)
+      if (oldEntry) {
+        engineRef.current?.stopNote(oldEntry.trackId, oldEntry.pitch)
+      }
+    }
+
+    pcHeldRef.current.set(rawKey, { pitch, trackId: track.id })
+    setPcHeld([...pcHeldRef.current.values()].map(v => v.pitch))
+
+    // Always play with normal duration - key release will trigger release envelope
+    handleMidiNoteOn(pitch, 0.85, track)
   }
 
   const pcNoteOff = (rawKey: string) => {
     if (!pcHeldRef.current.has(rawKey)) return
-    const pitch = pcHeldRef.current.get(rawKey) ?? 0
+    const entry = pcHeldRef.current.get(rawKey)
+    if (!entry) return
+    const { pitch, trackId } = entry
+
     pcHeldRef.current.delete(rawKey)
-    setPcHeld([...pcHeldRef.current.values()])
+    setPcHeld([...pcHeldRef.current.values()].map(v => v.pitch))
+    engineRef.current?.stopNote(trackId, pitch)
     handleMidiNoteOff(pitch)
   }
 
@@ -8262,10 +8848,20 @@ export default function App() {
     pcPieceTimersRef.current.clear()
     setPcHeldPieces([])
     if (pcHeldRef.current.size === 0) return
-    const pitches = [...pcHeldRef.current.values()]
+    const entries = [...pcHeldRef.current.values()]
+    for (const { pitch, trackId } of entries) {
+      engineRef.current?.stopNote(trackId, pitch)
+      handleMidiNoteOff(pitch)
+    }
     pcHeldRef.current.clear()
     setPcHeld([])
-    for (const pitch of pitches) handleMidiNoteOff(pitch)
+  }
+
+  const releaseSustainedNotes = () => {
+    const engine = engineRef.current
+    if (!engine) return
+    // This function is kept for compatibility but sustainNotesRef was removed
+    // All notes are now stopped via pcAllNotesOff when keyboard is disabled
   }
 
   const togglePcKeys = () => {
@@ -9323,9 +9919,30 @@ export default function App() {
   const removeSelected = () => {
     const id = selectedRef.current
     if (!id) return
+    const track = tracksRef.current.find((item) => item.id === id)
     // Del on a folder must not delete the tracks it holds.
-    if (tracksRef.current.find((track) => track.id === id)?.isFolder) removeFolder(id)
-    else removeTrack(id)
+    if (track?.isFolder) {
+      removeFolder(id)
+      return
+    }
+    // Instrumento: Delete apaga o pattern como o Del apaga o clipe de áudio.
+    // Com o editor aberto e uma caixa marcada, apaga só as notas da caixa.
+    if (track?.kind === 'instrument') {
+      if (midiEditorId === id && rollSel) {
+        const kept = track.midiNotes.filter((note) => !noteInSel(note, rollSel))
+        const removed = track.midiNotes.length - kept.length
+        if (removed > 0) {
+          setMidiNotes(id, sortNotes(kept))
+          notify(`${removed} nota(s) apagadas da seleção`)
+        } else {
+          notify('A seleção não tem notas')
+        }
+        return
+      }
+      if (track.midiNotes.length > 0) clearNotes(id)
+      return
+    }
+    clearClip(id)
   }
 
   const duplicateSelected = () => {
@@ -9878,14 +10495,23 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playheadStep, zoomBars, contentWidthPct, totalSteps])
 
-  const clipStyle = (track: TrackState) => {
+  const clipStyles = (track: TrackState) => {
     const stepDuration = 60 / bpm / 4
-    const left = Math.min(100, Math.max(0, (track.clipStart / totalSteps) * 100))
-    const width = (track.clipDuration / stepDuration / totalSteps) * 100
-    return {
-      left: `${left}%`,
-      width: `${Math.max(2, Math.min(width, 100 - left))}%`,
-    }
+    // Support both legacy single clip and new multi-clip
+    const clips = (track.clips?.length ?? 0) > 0 ? track.clips : (track.bufferId && track.clipDuration > 0 ? [{
+      id: 'legacy',
+      clipStart: track.clipStart,
+      clipDuration: track.clipDuration,
+      fadeIn: track.fadeIn,
+      fadeOut: track.fadeOut,
+    }] : [])
+    return clips.map((clip) => ({
+      id: clip.id,
+      left: `${Math.min(100, Math.max(0, (clip.clipStart / totalSteps) * 100))}%`,
+      width: `${Math.max(2, Math.min((clip.clipDuration / stepDuration / totalSteps) * 100, 100 - (clip.clipStart / totalSteps) * 100))}%`,
+      fadeIn: clip.fadeIn,
+      fadeOut: clip.fadeOut,
+    }))
   }
 
   const midiClipStyle = (track: TrackState) => {
@@ -9912,19 +10538,114 @@ export default function App() {
     return `${bars} comp. ×${repeats}`
   }
 
+  /**
+   * Move um clipe para outra lane de áudio: o buffer vai junto, a origem perde
+   * o item e o destino ganha. Clipe legado (track antiga de um take só) é
+   * materializado na hora, então o arraste funciona mesmo sem corte prévio.
+   */
+  const moveClipToTrack = (fromId: string, clipId: string | undefined, toId: string, atStep: number): boolean => {
+    const engine = engineRef.current
+    const from = tracksRef.current.find((item) => item.id === fromId)
+    const to = tracksRef.current.find((item) => item.id === toId)
+    if (!engine || !from || !to || fromId === toId) return false
+    if (to.isFolder || to.kind !== 'audio') return false
+    let sourceClips = from.clips ?? []
+    let clip = clipId ? sourceClips.find((item) => item.id === clipId) : undefined
+    const wasLegacy = !clip
+    if (!clip) {
+      if (!from.bufferId || from.clipDuration <= 0) return false
+      clip = {
+        id: newId(),
+        bufferId: from.bufferId,
+        clipStart: from.clipStart,
+        clipDuration: from.clipDuration,
+        clipName: from.clipName,
+        fadeIn: from.fadeIn,
+        fadeOut: from.fadeOut,
+        takes: from.takes ?? [],
+      }
+      sourceClips = [clip]
+    }
+    const buffer = engine.getClip(fromId, clip.id)?.buffer ?? engine.getBuffer(fromId)
+    if (!buffer) return false
+    const moved: Clip = { ...clip, clipStart: atStep }
+    if (wasLegacy) {
+      engine.setBuffer(fromId, null)
+      engine.setClipStart(fromId, 0)
+      engine.setClipDuration(fromId, 0)
+    } else {
+      engine.removeClip(fromId, clip.id)
+    }
+    engine.upsertClip(toId, {
+      id: moved.id,
+      buffer,
+      bufferLabel: moved.bufferId,
+      clipStart: atStep,
+      clipDuration: moved.clipDuration,
+      fadeIn: moved.fadeIn,
+      fadeOut: moved.fadeOut,
+    })
+    const remaining = sourceClips.filter((item) => item.id !== moved.id)
+    const last = remaining[remaining.length - 1]
+    const destClips = [...(to.clips ?? []), moved]
+    const destLast = destClips[destClips.length - 1]
+    setPeaks((prev) => {
+      const copy = { ...prev }
+      const pk = prev[moved.id] ?? prev[fromId]
+      if (pk) copy[moved.id] = pk
+      if (remaining.length === 0) delete copy[fromId]
+      return copy
+    })
+    commitTracks(
+      tracksRef.current.map((item) => {
+        if (item.id === fromId) {
+          return {
+            ...item,
+            clips: remaining,
+            clipStart: last?.clipStart ?? 0,
+            clipDuration: last?.clipDuration ?? 0,
+            clipName: last?.clipName ?? '',
+            bufferId: last?.bufferId ?? '',
+          }
+        }
+        if (item.id === toId) {
+          return {
+            ...item,
+            clips: destClips,
+            clipStart: destLast.clipStart,
+            clipDuration: destLast.clipDuration,
+            clipName: destLast.clipName,
+            bufferId: destLast.bufferId,
+          }
+        }
+        return item
+      }),
+    )
+    setSelectedTrackId(toId)
+    notify(`Clipe movido para "${to.name}"`)
+    return true
+  }
+
   // Drag a recorded clip left/right to move its start step on the timeline.
-  const onClipPointerDown = (event: ReactPointerEvent<HTMLDivElement>, track: TrackState) => {
+  const onClipPointerDown = (event: ReactPointerEvent<HTMLDivElement>, track: TrackState, clipId?: string) => {
     if (event.button !== 0) return
     // Shift belongs to the lane: it picks a range instead of moving the take.
     if (event.shiftKey) return
-    if ((event.target as HTMLElement).closest('.clip-close')) return
+    event.stopPropagation()
     const lane = event.currentTarget.parentElement
     if (!lane) return
+    // O fallback visual 'legacy' não é um clipe de verdade: arrastar uma track
+    // antiga move o take legado, não um item que não existe na lista.
+    const realId = clipId && clipId !== 'legacy' && track.clips?.some((c) => c.id === clipId) ? clipId : undefined
+    const clip = realId ? track.clips?.find((c) => c.id === realId) : null
+    const startStep = clip ? clip.clipStart : track.clipStart
     clipDragRef.current = {
       trackId: track.id,
+      clipId: realId,
       startX: event.clientX,
-      startStep: track.clipStart,
+      startStep,
       pxPerStep: lane.clientWidth / Math.max(1, totalSteps),
+      lastStart: startStep,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
     setSelectedTrackId(track.id)
@@ -9936,18 +10657,62 @@ export default function App() {
     const delta = (event.clientX - drag.startX) / drag.pxPerStep
     const clamped = Math.max(0, Math.min(totalSteps - 1, snapStep(drag.startStep + delta, event.altKey)))
     const current = tracksRef.current.find((track) => track.id === drag.trackId)
-    if (!current || current.clipStart === clamped) return
-    engineRef.current?.setClipStart(drag.trackId, clamped)
-    commitTracks(
-      tracksRef.current.map((track) =>
-        track.id === drag.trackId ? { ...track, clipStart: clamped } : track,
-      ),
+    if (!current) return
+    // Lane sob o ponteiro: destaca o alvo quando é outra track de áudio.
+    const under = document.elementFromPoint(event.clientX, event.clientY)
+    const laneEl = under?.closest('.arrangement-lane') as HTMLElement | null
+    const underId = laneEl?.getAttribute('data-track-id') ?? null
+    const underTrack = underId ? tracksRef.current.find((track) => track.id === underId) : null
+    setClipDropTarget(
+      underId && underId !== drag.trackId && underTrack && !underTrack.isFolder && underTrack.kind === 'audio'
+        ? underId
+        : null,
     )
+    if (drag.lastStart === clamped) return
+    drag.lastStart = clamped
+    if (drag.clipId) {
+      // Move specific clip
+      const clip = current.clips?.find((c) => c.id === drag.clipId)
+      if (!clip) return
+      engineRef.current?.setClipStartFor(drag.trackId, drag.clipId, clamped)
+      commitTracks(
+        tracksRef.current.map((track) =>
+          track.id === drag.trackId
+            ? { ...track, clips: (track.clips ?? []).map((c) => c.id === drag.clipId ? { ...c, clipStart: clamped } : c) }
+            : track,
+        ),
+      )
+    } else {
+      // Legacy: move the whole track's single clip
+      engineRef.current?.setClipStart(drag.trackId, clamped)
+      commitTracks(
+        tracksRef.current.map((track) =>
+          track.id === drag.trackId ? { ...track, clipStart: clamped } : track,
+        ),
+      )
+    }
   }
 
   const onClipPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = clipDragRef.current
     clipDragRef.current = null
-    event.currentTarget.releasePointerCapture(event.pointerId)
+    setClipDropTarget(null)
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    } catch {
+      /* o ponteiro já tinha sido solto */
+    }
+    if (!drag) return
+    // Soltou sobre outra lane? O clipe troca de track, na posição horizontal
+    // em que o ponteiro parou.
+    const under = document.elementFromPoint(event.clientX, event.clientY)
+    const laneEl = under?.closest('.arrangement-lane') as HTMLElement | null
+    const underId = laneEl?.getAttribute('data-track-id') ?? null
+    if (underId && underId !== drag.trackId) {
+      const delta = (event.clientX - drag.startX) / drag.pxPerStep
+      const atStep = Math.max(0, Math.min(totalSteps - 1, snapStep(drag.startStep + delta, event.altKey)))
+      moveClipToTrack(drag.trackId, drag.clipId, underId, atStep)
+    }
   }
 
   // Main transport clock: elapsed time in minutes and seconds.
@@ -9974,12 +10739,8 @@ export default function App() {
       setTimeSel(to >= sel.anchor ? { from: sel.anchor, to } : { from: to, to: sel.anchor })
       return
     }
-    if (!scrubActiveRef.current) return
-    // While stopped the playhead follows the pointer live; while playing we
-    // only show a ghost line and commit on release (avoids restarting the
-    // transport on every pointermove).
-    if (isPlaying) setScrubGhost(step)
-    else setPlayheadStep(step)
+    // No scrubActiveRef anymore - selection is always active on drag
+    // Click (no drag) moves playhead, handled in onRulerPointerUp
   }
 
   const onRulerPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -9989,14 +10750,10 @@ export default function App() {
     } catch {
       /* pointer already gone */
     }
-    if (event.shiftKey) {
-      const anchor = snapStep(scrubStepFromEvent(event))
-      selDragRef.current = { anchor }
-      setTimeSel({ from: anchor, to: anchor })
-      return
-    }
-    scrubActiveRef.current = true
-    rulerScrubMove(event)
+    // Mouse-only selection: always start selection on drag, click moves playhead
+    const anchor = snapStep(scrubStepFromEvent(event))
+    selDragRef.current = { anchor }
+    setTimeSel({ from: anchor, to: anchor })
   }
 
   const onRulerPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -10010,11 +10767,6 @@ export default function App() {
       if (range.to - range.from < 1) seek(Math.floor(range.from))
       return
     }
-    if (!scrubActiveRef.current) return
-    scrubActiveRef.current = false
-    const step = scrubStepFromEvent(event)
-    setScrubGhost(null)
-    if (isPlaying) seek(Math.floor(step))
   }
 
   /**
@@ -10028,7 +10780,7 @@ export default function App() {
     event: ReactPointerEvent<HTMLDivElement>,
     trackId: string,
   ) => {
-    if (event.button !== 0 || !event.shiftKey) return
+    if (event.button !== 0) return
     try {
       event.currentTarget.setPointerCapture(event.pointerId)
     } catch {
@@ -10338,24 +11090,6 @@ export default function App() {
               value={bpm}
               onChange={(event) => setBpm(Number(event.target.value) || 120)}
             />
-          </div>
-          <div className="display-bars">
-            <label htmlFor="bars-input">BARS</label>
-            <input
-              id="bars-input"
-              type="number"
-              min={1}
-              max={128}
-              value={arrangementBars}
-              onChange={(event) => changeBars(Number(event.target.value))}
-            />
-          </div>
-          <div className="display-step">
-            BAR{' '}
-            <span>
-              {String(currentBar).padStart(3, '0')}/{String(arrangementBars).padStart(2, '0')}
-            </span>{' '}
-            · 16ª <span>{currentStep + 1}/16</span>
           </div>
         </div>
 
@@ -11041,12 +11775,6 @@ export default function App() {
           <div className="playhead" style={{ left: `${playheadLeft}%` }}>
             <span className="playhead-knob" />
           </div>
-          {scrubGhost !== null ? (
-            <div
-              className="playhead scrub-ghost"
-              style={{ left: `${(scrubGhost / totalSteps) * 100}%` }}
-            />
-          ) : null}
           {timeSel ? (
             <div
               className={`time-selection${punchIn ? ' punch' : ''}${
@@ -11095,7 +11823,8 @@ export default function App() {
               return (
               <div
                 key={track.id}
-                className={`arrangement-lane ${row.indent ? 'in-folder' : ''} ${selectedTrackId === track.id ? 'selected' : ''} ${laneVisible ? 'auto-open' : ''}`}
+                data-track-id={track.id}
+                className={`arrangement-lane ${row.indent ? 'in-folder' : ''} ${selectedTrackId === track.id ? 'selected' : ''} ${laneVisible ? 'auto-open' : ''} ${clipDropTarget === track.id ? 'clip-drop-target' : ''}`}
                 style={{
                   borderLeftColor: track.color,
                   backgroundSize: `${barWidthPct}% 100%, ${barWidthPct / 4}% 100%`,
@@ -11155,23 +11884,24 @@ export default function App() {
                           backgroundSize: `${(track.patternSteps / totalSteps) * 100}% 100%`,
                           ...midiClipStyle(track),
                         }}
-                        title="Pattern em loop — se repete até o fim da música · clique para editar"
+                        title="Pattern em loop — se repete até o fim da música · clique para editar · botão direito para opções"
                         onClick={(event) => {
                           event.stopPropagation()
                           setMidiEditorId(track.id)
                         }}
+                        onContextMenu={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setSelectedTrackId(track.id)
+                          const lane = event.currentTarget.closest('.arrangement-lane') as HTMLElement | null
+                          setClipMenu({
+                            x: event.clientX,
+                            y: event.clientY,
+                            trackId: track.id,
+                            step: lane ? stepFromLane(event.clientX, lane) : 0,
+                          })
+                        }}
                       >
-                        <button
-                          type="button"
-                          className="clip-close"
-                          title="Limpar pattern MIDI"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            clearNotes(track.id)
-                          }}
-                        >
-                          ×
-                        </button>
                         <span className="midi-item-label">
                           {instrumentIcon(track.instrument)} {patternLabel(track)} ·{' '}
                           {track.midiNotes.length} nota(s)
@@ -11181,7 +11911,7 @@ export default function App() {
                       <div
                         className="audio-item midi-item clip-draggable"
                         style={{ borderColor: track.color, ...midiClipStyle(track) }}
-                        title="Arraste para mover o pattern · clique para abrir o editor"
+                        title="Arraste para mover o pattern · clique para abrir o editor · botão direito para opções"
                         onPointerDown={(event) => onMidiClipPointerDown(event, track)}
                         onPointerMove={onMidiClipPointerMove}
                         onPointerUp={onMidiClipPointerUp}
@@ -11194,18 +11924,19 @@ export default function App() {
                           }
                           setMidiEditorId(track.id)
                         }}
+                        onContextMenu={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setSelectedTrackId(track.id)
+                          const lane = event.currentTarget.closest('.arrangement-lane') as HTMLElement | null
+                          setClipMenu({
+                            x: event.clientX,
+                            y: event.clientY,
+                            trackId: track.id,
+                            step: lane ? stepFromLane(event.clientX, lane) : 0,
+                          })
+                        }}
                       >
-                        <button
-                          type="button"
-                          className="clip-close"
-                          title="Limpar pattern MIDI"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            clearNotes(track.id)
-                          }}
-                        >
-                          ×
-                        </button>
                         <span className="midi-item-label">
                           {instrumentIcon(track.instrument)} {track.midiNotes.length} nota(s)
                         </span>
@@ -11226,58 +11957,65 @@ export default function App() {
                         : '🥁 Criar pattern de bateria'}
                     </button>
                   )
-                ) : peaks[track.id] ? (
-                  <div
-                    className="audio-item clip-draggable"
-                    style={{ borderColor: track.color, ...clipStyle(track) }}
-                    title="Arraste para mover o clipe no tempo"
-                    onPointerDown={(event) => onClipPointerDown(event, track)}
-                    onPointerMove={onClipPointerMove}
-                    onPointerUp={onClipPointerUp}
-                    onPointerCancel={onClipPointerUp}
-                  >
-                    <button
-                      type="button"
-                      className="clip-close"
-                      title="Remover clipe gravado"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        clearClip(track.id)
-                      }}
-                    >
-                      ×
-                    </button>
-                    <Waveform peaks={peaks[track.id]} color={track.color} />
-                    <div
-                      className="clip-trim"
-                      title="Arraste para aparar o fim do clipe"
-                      onPointerDown={(event) => onTrimPointerDown(event, track)}
-                      onPointerMove={onTrimPointerMove}
-                      onPointerUp={onTrimPointerUp}
-                      onPointerCancel={onTrimPointerUp}
-                      onClick={(event) => event.stopPropagation()}
-                    />
-                    <div
-                      className="clip-fade clip-fade-in"
-                      style={{ width: `${Math.max(1.5, fadePct(track, 'fadeIn'))}%` }}
-                      title="Fade de entrada — arraste para ajustar · Alt = livre"
-                      onPointerDown={(event) => onFadePointerDown(event, track, 'fadeIn')}
-                      onPointerMove={onFadePointerMove}
-                      onPointerUp={onFadePointerUp}
-                      onPointerCancel={onFadePointerUp}
-                      onClick={(event) => event.stopPropagation()}
-                    />
-                    <div
-                      className="clip-fade clip-fade-out"
-                      style={{ width: `${Math.max(1.5, fadePct(track, 'fadeOut'))}%` }}
-                      title="Fade de saída — arraste para ajustar · Alt = livre"
-                      onPointerDown={(event) => onFadePointerDown(event, track, 'fadeOut')}
-                      onPointerMove={onFadePointerMove}
-                      onPointerUp={onFadePointerUp}
-                      onPointerCancel={onFadePointerUp}
-                      onClick={(event) => event.stopPropagation()}
-                    />
-                  </div>
+                ) : ((track.clips?.length ?? 0) > 0 || (track.bufferId && track.clipDuration > 0) || peaks[track.id]) ? (
+                  <>
+                    {clipStyles(track).map((clipStyle) => (
+                      <div
+                        key={clipStyle.id}
+                        className="audio-item clip-draggable"
+                        style={{ borderColor: track.color, left: clipStyle.left, width: clipStyle.width }}
+                        title="Arraste para mover no tempo · solte sobre outra lane para trocar de track · botão direito para opções"
+                        onPointerDown={(event) => onClipPointerDown(event, track, clipStyle.id)}
+                        onPointerMove={onClipPointerMove}
+                        onPointerUp={onClipPointerUp}
+                        onPointerCancel={onClipPointerUp}
+                        onContextMenu={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setSelectedTrackId(track.id)
+                          const lane = event.currentTarget.closest('.arrangement-lane') as HTMLElement | null
+                          setClipMenu({
+                            x: event.clientX,
+                            y: event.clientY,
+                            trackId: track.id,
+                            step: lane ? stepFromLane(event.clientX, lane) : 0,
+                            clipId: clipStyle.id !== 'legacy' ? clipStyle.id : undefined,
+                          })
+                        }}
+                      >
+                        <Waveform peaks={peaks[clipStyle.id] ?? peaks[track.id]} color={track.color} />
+                        <div
+                          className="clip-trim"
+                          title="Arraste para aparar o fim do clipe"
+                          onPointerDown={(event) => onTrimPointerDown(event, track, clipStyle.id === 'legacy' ? undefined : clipStyle.id)}
+                          onPointerMove={onTrimPointerMove}
+                          onPointerUp={onTrimPointerUp}
+                          onPointerCancel={onTrimPointerUp}
+                          onClick={(event) => event.stopPropagation()}
+                        />
+                        <div
+                          className="clip-fade clip-fade-in"
+                          style={{ width: `${Math.max(1.5, fadePct(track, 'fadeIn', clipStyle.id))}%` }}
+                          title="Fade de entrada — arraste para ajustar · Alt = livre"
+                          onPointerDown={(event) => onFadePointerDown(event, track, 'fadeIn', clipStyle.id === 'legacy' ? undefined : clipStyle.id)}
+                          onPointerMove={onFadePointerMove}
+                          onPointerUp={onFadePointerUp}
+                          onPointerCancel={onFadePointerUp}
+                          onClick={(event) => event.stopPropagation()}
+                        />
+                        <div
+                          className="clip-fade clip-fade-out"
+                          style={{ width: `${Math.max(1.5, fadePct(track, 'fadeOut', clipStyle.id))}%` }}
+                          title="Fade de saída — arraste para ajustar · Alt = livre"
+                          onPointerDown={(event) => onFadePointerDown(event, track, 'fadeOut', clipStyle.id === 'legacy' ? undefined : clipStyle.id)}
+                          onPointerMove={onFadePointerMove}
+                          onPointerUp={onFadePointerUp}
+                          onPointerCancel={onFadePointerUp}
+                          onClick={(event) => event.stopPropagation()}
+                        />
+                      </div>
+                    ))}
+                  </>
                 ) : (
                   <button
                     type="button"
@@ -11813,14 +12551,6 @@ export default function App() {
                     {formatDb(gainToDb(levels[track.id] ?? 0))}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  className="mini-btn danger mcp-remove"
-                  title="Remover track"
-                  onClick={() => removeTrack(track.id)}
-                >
-                  Remover
-                </button>
               </div>
             ))}
             <div className="mcp-channel master">
@@ -12052,12 +12782,12 @@ export default function App() {
               ⎘ Colar aqui
               <span>Ctrl+V</span>
             </button>
-            {clipMenuTrack.kind === 'audio' && clipMenuTrack.bufferId ? (
+            {clipMenuTrack.kind === 'audio' && (clipMenuTrack.bufferId || clipMenuTrack.clips.length > 0) ? (
               <>
                 <div className="clip-menu-sep" />
                 <button
                   type="button"
-                  title="Corta o áudio aqui: a segunda metade ganha uma lane logo abaixo"
+                  title="Corta o áudio aqui: as duas metades ficam nesta mesma track"
                   onClick={() => {
                     splitClipAt(clipMenuTrack.id, clipMenu.step)
                     setClipMenu(null)
@@ -12067,12 +12797,13 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  disabled={clipMenu.step <= clipMenuTrack.clipStart}
+                  disabled={clipMenu.step <= (clipMenuClip ? clipMenuClip.clipStart : clipMenuTrack.clipStart)}
                   title="Apara o fim do clipe no ponto clicado"
                   onClick={() => {
                     trimClipEnd(
                       clipMenuTrack.id,
-                      (clipMenu.step - clipMenuTrack.clipStart) * (60 / bpm / 4),
+                      (clipMenu.step - (clipMenuClip ? clipMenuClip.clipStart : clipMenuTrack.clipStart)) * (60 / bpm / 4),
+                      clipMenuClip?.id,
                     )
                     setClipMenu(null)
                   }}
@@ -12083,7 +12814,7 @@ export default function App() {
                   type="button"
                   title="Restaura o clipe com a duração gravada"
                   onClick={() => {
-                    trimClipEnd(clipMenuTrack.id, Number.MAX_SAFE_INTEGER)
+                    trimClipEnd(clipMenuTrack.id, Number.MAX_SAFE_INTEGER, clipMenuClip?.id)
                     setClipMenu(null)
                   }}
                 >
@@ -12093,11 +12824,12 @@ export default function App() {
                   type="button"
                   className="danger"
                   onClick={() => {
-                    clearClip(clipMenuTrack.id)
+                    if (clipMenuClip) removeClipById(clipMenuTrack.id, clipMenuClip.id)
+                    else clearClip(clipMenuTrack.id)
                     setClipMenu(null)
                   }}
                 >
-                  ✕ Remover clipe
+                  ✕ {clipMenuClip ? 'Remover este clipe' : 'Remover clipes da track'}
                 </button>
               </>
             ) : null}
@@ -12211,7 +12943,7 @@ export default function App() {
             className="clip-menu"
             style={{
               left: Math.min(trackMenu.x, window.innerWidth - 230),
-              top: Math.min(trackMenu.y, window.innerHeight - 240),
+              top: Math.min(trackMenu.y, window.innerHeight - 360),
             }}
             onClick={(event) => event.stopPropagation()}
           >
@@ -12240,6 +12972,7 @@ export default function App() {
             </button>
             <button
               type="button"
+              className="danger"
               onClick={() => {
                 duplicateTrack(trackMenuTrack.id)
                 setTrackMenu(null)
@@ -12247,17 +12980,6 @@ export default function App() {
             >
               ⧉ Duplicar track
               <span>Ctrl+D</span>
-            </button>
-            <button
-              type="button"
-              className="danger"
-              onClick={() => {
-                removeTrack(trackMenuTrack.id)
-                setTrackMenu(null)
-              }}
-            >
-              ✕ Remover track
-              <span>Del</span>
             </button>
             {trackMenuTrack.kind === 'audio' ? (
               <>
@@ -12297,6 +13019,18 @@ export default function App() {
                 </button>
               </>
             ) : null}
+            <div className="clip-menu-sep" />
+            <button
+              type="button"
+              className="danger"
+              title="Apaga a track inteira, com clipes e efeitos"
+              onClick={() => {
+                removeTrack(trackMenuTrack.id)
+                setTrackMenu(null)
+              }}
+            >
+              🗑 Remover track
+            </button>
           </div>
         </div>
       ) : null}
@@ -12711,7 +13445,7 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-                {midiEditorTrack.instrument === 'drums' ? (
+                                {midiEditorTrack.instrument === 'drums' ? (
                   <>
                     <label htmlFor="midi-groove">Padrão</label>
                     <select
@@ -14233,14 +14967,14 @@ export default function App() {
                     <option value="">
                       {availableBuiltinFx.length === 0 && !isNativeApp() ? 'Todos adicionados' : 'Efeito…'}
                     </option>
-                    {isNativeApp() ? (
-                      <option value="__vst__">⚡ Plugin VST / VST3…</option>
-                    ) : null}
                     {availableBuiltinFx.map((fxId) => (
                       <option key={fxId} value={fxId}>
                         {BUILTIN_FX_META[fxId].label} — {BUILTIN_FX_META[fxId].hint}
                       </option>
                     ))}
+                    {isNativeApp() ? (
+                      <option value="__vst__">⚡ Plugin VST / VST3…</option>
+                    ) : null}
                   </select>
                   <span className="chain-add-hint">
                     {availableBuiltinFx.length === 0 && !isNativeApp() ? 'cadeia completa' : 'adicionar'}

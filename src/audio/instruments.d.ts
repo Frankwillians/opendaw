@@ -50,6 +50,11 @@ type AnyAudioContext = AudioContext | OfflineAudioContext;
  * Schedule one instrument voice. `duration` shapes the piano and bass notes;
  * drums use their own fixed decays. `voice` selects the timbre (piano), kit
  * (drums) or bass character; unknown ids fall back to the default.
+ * Returns the created oscillators for proper stopping (piano/bass only).
  */
-export declare function scheduleVoice(ctx: AnyAudioContext, destination: AudioNode, kind: InstrumentKind, pitch: number, velocity: number, when: number, duration: number, voice?: string): void;
+export declare function scheduleVoice(ctx: AnyAudioContext, destination: AudioNode, kind: InstrumentKind, pitch: number, velocity: number, when: number, duration: number, voice?: string): {
+    oscillators: OscillatorNode[];
+    amp: GainNode;
+    releaseEnd: number;
+};
 export {};

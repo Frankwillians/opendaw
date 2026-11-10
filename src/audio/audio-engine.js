@@ -1891,6 +1891,7 @@ export class AudioEngine {
             notes: [],
             patternSteps: 0,
             voice: '',
+            clips: [],
         };
         this.tracks.set(id, track);
         this.rewire(id);
@@ -3409,6 +3410,152 @@ export class AudioEngine {
         track.monitor = null;
     }
     /**
+     * Adds a new clip to the track's timeline (Reaper-style items).
+     * Returns the clip ID.
+     */
+    addClip(id, clip, clipId = Math.random().toString(36).slice(2)) {
+        const track = this.tracks.get(id);
+        if (!track)
+            return '';
+        const newClip = {
+            id: clipId,
+            buffer: clip.buffer,
+            bufferLabel: clip.bufferLabel,
+            clipStart: clip.clipStart,
+            clipDuration: clip.clipDuration,
+            fadeIn: clip.fadeIn,
+            fadeOut: clip.fadeOut,
+            takes: [],
+        };
+        track.clips.push(newClip);
+        // Also update legacy fields for backward compatibility (use the latest clip)
+        track.buffer = clip.buffer;
+        track.bufferLabel = clip.bufferLabel;
+        track.clipStart = clip.clipStart;
+        track.clipDuration = clip.clipDuration;
+        track.fadeIn = clip.fadeIn;
+        track.fadeOut = clip.fadeOut;
+        return clipId;
+    }
+    /**
+     * Removes a clip from the track's timeline.
+     */
+    removeClip(id, clipId) {
+        const track = this.tracks.get(id);
+        if (!track)
+            return;
+        const idx = track.clips.findIndex((c) => c.id === clipId);
+        if (idx >= 0) {
+            track.clips.splice(idx, 1);
+        }
+        // Update legacy fields to the last clip or clear
+        const lastClip = track.clips[track.clips.length - 1];
+        if (lastClip) {
+            track.buffer = lastClip.buffer;
+            track.bufferLabel = lastClip.bufferLabel;
+            track.clipStart = lastClip.clipStart;
+            track.clipDuration = lastClip.clipDuration;
+            track.fadeIn = lastClip.fadeIn;
+            track.fadeOut = lastClip.fadeOut;
+        }
+        else {
+            track.buffer = null;
+            track.bufferLabel = '';
+            track.clipStart = 0;
+            track.clipDuration = 0;
+        }
+    }
+    /** The stored sample of a lane, dry, as the razor and the moves see it. */
+    getBuffer(id) {
+        return this.tracks.get(id)?.buffer ?? null;
+    }
+    getClip(id, clipId) {
+        return this.tracks.get(id)?.clips.find((c) => c.id === clipId) ?? null;
+    }
+    /**
+     * Inserts or updates a clip keeping the caller's id — the project state is
+     * the source of truth and the engine mirrors it. A null buffer keeps the
+     * sample the clip already holds (rehydrate fills it in afterwards).
+     */
+    upsertClip(id, clip) {
+        const track = this.tracks.get(id);
+        if (!track)
+            return;
+        const existing = track.clips.find((c) => c.id === clip.id);
+        if (existing) {
+            if (clip.buffer)
+                existing.buffer = clip.buffer;
+            existing.bufferLabel = clip.bufferLabel;
+            existing.clipStart = Math.max(0, clip.clipStart);
+            existing.clipDuration = clip.clipDuration;
+            existing.fadeIn = clip.fadeIn;
+            existing.fadeOut = clip.fadeOut;
+        }
+        else {
+            track.clips.push({
+                id: clip.id,
+                buffer: clip.buffer,
+                bufferLabel: clip.bufferLabel,
+                clipStart: Math.max(0, clip.clipStart),
+                clipDuration: clip.clipDuration,
+                fadeIn: clip.fadeIn,
+                fadeOut: clip.fadeOut,
+                takes: [],
+            });
+        }
+        this.mirrorLegacyFromClips(track);
+    }
+    /** Moves one clip's start without touching the lane's other clips. */
+    setClipStartFor(id, clipId, step) {
+        const clip = this.getClip(id, clipId);
+        if (!clip)
+            return;
+        clip.clipStart = Math.max(0, step);
+        this.mirrorLegacyFromClips(this.tracks.get(id));
+    }
+    /** Trims one clip against its own sample, not the lane's legacy buffer. */
+    setClipDurationFor(id, clipId, seconds) {
+        const clip = this.getClip(id, clipId);
+        if (!clip)
+            return;
+        const max = clip.buffer?.duration ?? seconds;
+        clip.clipDuration = Math.min(max, Math.max(0.02, seconds || max));
+        this.mirrorLegacyFromClips(this.tracks.get(id));
+    }
+    /** Copies a range of one clip's sample into a fresh buffer (same-lane razor). */
+    sliceClipBuffer(id, clipId, from, to) {
+        const src = this.getClip(id, clipId)?.buffer ?? this.tracks.get(id)?.buffer;
+        if (!src)
+            return null;
+        const a = Math.max(0, Math.min(src.length, Math.round(from * src.sampleRate)));
+        const b = Math.max(a, Math.min(src.length, Math.round(to * src.sampleRate)));
+        if (b - a <= 0)
+            return null;
+        const out = this.ctx.createBuffer(src.numberOfChannels, b - a, src.sampleRate);
+        for (let channel = 0; channel < src.numberOfChannels; channel += 1) {
+            out.copyToChannel(src.getChannelData(channel).slice(a, b), channel);
+        }
+        return out;
+    }
+    /** Legacy fields follow the last clip so older paths keep seeing audio. */
+    mirrorLegacyFromClips(track) {
+        const last = track.clips[track.clips.length - 1];
+        if (last) {
+            track.buffer = last.buffer;
+            track.bufferLabel = last.bufferLabel;
+            track.clipStart = last.clipStart;
+            track.clipDuration = last.clipDuration;
+            track.fadeIn = last.fadeIn;
+            track.fadeOut = last.fadeOut;
+        }
+        else {
+            track.buffer = null;
+            track.bufferLabel = '';
+            track.clipStart = 0;
+            track.clipDuration = 0;
+        }
+    }
+    /**
      * Put a rendered pass in front of the speakers and the export without
      * touching the recorded clip. Passing null gives the dry take back.
      */
@@ -3937,6 +4084,9 @@ export class AudioEngine {
     clipEnd(track) {
         return clipEndOf(track.clipDuration, track.buffer?.duration ?? 0);
     }
+    clipEndForClip(clip) {
+        return clipEndOf(clip.clipDuration, clip.buffer?.duration ?? 0);
+    }
     hasBuffer(id) {
         return Boolean(this.tracks.get(id)?.buffer);
     }
@@ -3952,40 +4102,49 @@ export class AudioEngine {
         this.tracks.forEach((track) => this.scheduleAutomation(track, fromStep));
         this.groups.forEach((group) => this.scheduleGroupAutomation(group, fromStep));
         this.tracks.forEach((track) => {
-            // A lane with a rendered native pass plays that pass; the take underneath
-            // stays where the producer left it.
-            const take = takeToPlay(track);
-            if (!take)
-                return;
-            const source = this.ctx.createBufferSource();
-            source.buffer = take;
-            const shape = this.ctx.createGain();
-            // The clip goes in as itself: a take is printed from the lane's input, so
-            // what is already on the lane keeps playing during an over-dub instead of
-            // being muted to protect a printer that no longer reads the chain.
-            source.connect(shape);
-            shape.connect(track.panner);
-            const end = this.clipEnd(track);
-            const delta = track.clipStart - fromStep;
-            if (delta >= 0) {
-                const t0 = when + delta * stepDuration;
-                source.start(t0, 0, Math.max(0.02, end));
-                scheduleClipFade(shape, t0, 0, end, track.fadeIn, track.fadeOut);
+            // Play all clips on this track (multi-clip support)
+            const clipsToPlay = track.clips.length > 0 ? track.clips : [{
+                    // Legacy single clip fallback
+                    buffer: takeToPlay(track),
+                    bufferLabel: track.bufferLabel,
+                    clipStart: track.clipStart,
+                    clipDuration: track.clipDuration,
+                    fadeIn: track.fadeIn,
+                    fadeOut: track.fadeOut,
+                    takes: [],
+                    id: 'legacy',
+                }];
+            for (const clip of clipsToPlay) {
+                const take = clip.monitor?.buffer ?? clip.buffer;
+                if (!take)
+                    continue;
+                const source = this.ctx.createBufferSource();
+                source.buffer = take;
+                const shape = this.ctx.createGain();
+                source.connect(shape);
+                shape.connect(track.panner);
+                const end = this.clipEndForClip(clip);
+                const delta = clip.clipStart - fromStep;
+                if (delta >= 0) {
+                    const t0 = when + delta * stepDuration;
+                    source.start(t0, 0, Math.max(0.02, end));
+                    scheduleClipFade(shape, t0, 0, end, clip.fadeIn, clip.fadeOut);
+                }
+                else {
+                    const offset = -delta * stepDuration;
+                    if (offset >= end)
+                        continue;
+                    source.start(when, offset, Math.max(0.02, end - offset));
+                    scheduleClipFade(shape, when, offset, end, clip.fadeIn, clip.fadeOut);
+                }
+                // Prune finished sources so a long looping session never accumulates them.
+                source.onended = () => {
+                    const idx = this.sources.indexOf(source);
+                    if (idx >= 0)
+                        this.sources.splice(idx, 1);
+                };
+                this.sources.push(source);
             }
-            else {
-                const offset = -delta * stepDuration;
-                if (offset >= end)
-                    return;
-                source.start(when, offset, Math.max(0.02, end - offset));
-                scheduleClipFade(shape, when, offset, end, track.fadeIn, track.fadeOut);
-            }
-            // Prune finished sources so a long looping session never accumulates them.
-            source.onended = () => {
-                const idx = this.sources.indexOf(source);
-                if (idx >= 0)
-                    this.sources.splice(idx, 1);
-            };
-            this.sources.push(source);
         });
     }
     playBuffers(when = this.ctx.currentTime) {
@@ -4039,37 +4198,111 @@ export class AudioEngine {
         // frozen currentTime, so wake it up and schedule against the clock it has
         // afterwards instead of a timestamp that is already in the past.
         if (this.ctx.state === 'suspended') {
-            void this.ctx.resume().then(() => this.voice(track, kind, pitch, velocity, when, duration)).catch(() => { });
+            void this.ctx.resume().then(() => this.voice(trackId, track, kind, pitch, velocity, when, duration)).catch(() => { });
             return;
         }
-        this.voice(track, kind, pitch, velocity, when, duration);
+        this.voice(trackId, track, kind, pitch, velocity, when, duration);
     }
-    voice(track, kind, pitch, velocity, when, duration) {
+    voice(trackId, track, kind, pitch, velocity, when, duration) {
         const gate = this.ctx.createGain();
         gate.gain.value = 1;
         gate.connect(track.panner);
-        scheduleVoice(this.ctx, gate, kind, pitch, velocity, Math.max(when, this.ctx.currentTime), duration, track.voice);
+        const { oscillators, amp, releaseEnd } = scheduleVoice(this.ctx, gate, kind, pitch, velocity, Math.max(when, this.ctx.currentTime), duration, track.voice);
         const entry = {
             gate,
+            amp,
+            oscillators,
+            releaseEnd,
             timer: window.setTimeout(() => {
                 const idx = this.voiceGates.indexOf(entry);
                 if (idx >= 0)
                     this.voiceGates.splice(idx, 1);
                 gate.disconnect();
-            }, (duration + 2.5) * 1000),
+            }, (duration + 7.5) * 1000), // Extra time for release
+            trackId,
+            pitch,
         };
         this.voiceGates.push(entry);
+        // Schedule automatic note-off for playback (non-live) notes to trigger release envelope
+        // at the end of the note's duration. This prevents infinite sustain on recorded notes.
+        const releaseAt = Math.max(when, this.ctx.currentTime) + duration;
+        const delay = (releaseAt - this.ctx.currentTime) * 1000;
+        if (delay > 0) {
+            window.setTimeout(() => {
+                this.stopNote(trackId, pitch);
+            }, delay);
+        }
+    }
+    /** Stops a specific voice by trackId and pitch (for key release). Triggers release envelope. */
+    stopNote(trackId, pitch) {
+        const idx = this.voiceGates.findIndex((e) => e.trackId === trackId && e.pitch === pitch);
+        if (idx >= 0) {
+            const { gate, amp, oscillators, releaseEnd, timer } = this.voiceGates[idx];
+            window.clearTimeout(timer);
+            // Trigger release envelope on the amp gain node
+            const now = this.ctx.currentTime;
+            const releaseTime = Math.max(0.01, Math.min(2.0, releaseEnd - now));
+            try {
+                // Cancel any scheduled values and start release ramp
+                amp.gain.cancelScheduledValues(now);
+                amp.gain.setValueAtTime(amp.gain.value, now);
+                amp.gain.exponentialRampToValueAtTime(0.0001, now + releaseTime);
+            }
+            catch {
+                /* ignore */
+            }
+            // Stop oscillators after release time
+            setTimeout(() => {
+                for (const osc of oscillators) {
+                    try {
+                        osc.stop();
+                    }
+                    catch {
+                        /* already stopped */
+                    }
+                }
+                try {
+                    gate.disconnect();
+                }
+                catch {
+                    /* already detached */
+                }
+            }, releaseTime * 1000 + 50);
+            this.voiceGates.splice(idx, 1);
+        }
     }
     /** Silences every in-flight instrument voice (seek / stop / loop restart). */
     stopNotes() {
-        for (const { gate, timer } of this.voiceGates) {
+        const now = this.ctx.currentTime;
+        for (const { gate, amp, oscillators, releaseEnd, timer } of this.voiceGates) {
             window.clearTimeout(timer);
+            // Trigger release envelope
+            const releaseTime = Math.max(0.01, Math.min(2.0, releaseEnd - now));
             try {
-                gate.disconnect();
+                amp.gain.cancelScheduledValues(now);
+                amp.gain.setValueAtTime(amp.gain.value, now);
+                amp.gain.exponentialRampToValueAtTime(0.0001, now + releaseTime);
             }
             catch {
-                /* already detached */
+                /* ignore */
             }
+            // Stop oscillators after release time
+            setTimeout(() => {
+                for (const osc of oscillators) {
+                    try {
+                        osc.stop();
+                    }
+                    catch {
+                        /* already stopped */
+                    }
+                }
+                try {
+                    gate.disconnect();
+                }
+                catch {
+                    /* already detached */
+                }
+            }, releaseTime * 1000 + 50);
         }
         this.voiceGates.length = 0;
     }

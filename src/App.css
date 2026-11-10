@@ -1231,6 +1231,14 @@ button {
   box-shadow: inset 2px 0 0 rgba(121, 168, 214, 0.35);
 }
 
+/* Lane prestes a receber um clipe arrastado de outra track. */
+.arrangement-lane.clip-drop-target {
+  background-color: #243024;
+  box-shadow:
+    inset 0 0 0 2px rgba(126, 231, 135, 0.7),
+    inset 0 0 26px rgba(126, 231, 135, 0.14);
+}
+
 .track-actions {
   display: flex;
   flex-wrap: wrap;

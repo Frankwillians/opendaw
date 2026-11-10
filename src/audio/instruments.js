@@ -193,27 +193,31 @@ const PIANO_CONFIGS = {
         tremolo: 0,
     },
 };
-/** Additive piano voice; the timbre is chosen by `voice`. */
+/** Additive piano voice; the timbre is chosen by `voice`. Returns oscillators and amp for proper release. */
 function pianoVoice(ctx, dest, pitch, velocity, when, duration, voice) {
     const cfg = PIANO_CONFIGS[voice] ?? PIANO_CONFIGS.epiano;
     const freq = midiToHz(pitch + cfg.subOffset);
     const peak = 0.42 * Math.max(0.08, Math.min(1, velocity));
+    // Always use sustain-style envelope: hold at sustain level until release is triggered
     const dur = Math.max(0.08, Math.min(8, duration));
     const rel = cfg.releaseExtra;
-    const releaseEnd = when + dur + rel;
     const decayTo = when + Math.min(0.35 + dur * 0.5, (dur + rel) * 0.6) * cfg.decayBoost;
+    const sustainLevel = Math.max(0.0002, peak * 0.22);
+    // Release will be triggered by stopNote; this is the max time we'll wait
+    const releaseEnd = when + dur + rel + 5; // 5s max additional time for release
     const amp = ctx.createGain();
     const g = amp.gain;
     g.setValueAtTime(0.0001, when);
     g.linearRampToValueAtTime(peak, when + 0.005);
-    g.exponentialRampToValueAtTime(Math.max(0.0002, peak * 0.22), decayTo);
-    g.exponentialRampToValueAtTime(0.0001, releaseEnd);
+    g.exponentialRampToValueAtTime(sustainLevel, decayTo);
+    // NOTE: Release ramp is NOT scheduled here - it will be triggered by stopNote
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
     filter.frequency.value = Math.min(11000, cfg.filterBase + freq * cfg.filterMul);
     filter.Q.value = cfg.q;
     amp.connect(filter);
     filter.connect(dest);
+    const oscillators = [];
     for (const [ratio, level] of cfg.partials) {
         const osc = ctx.createOscillator();
         osc.type = 'sine';
@@ -224,7 +228,8 @@ function pianoVoice(ctx, dest, pitch, velocity, when, duration, voice) {
         osc.connect(pg);
         pg.connect(amp);
         osc.start(when);
-        osc.stop(releaseEnd + 0.02);
+        // Don't schedule osc.stop here - will be done in stopNote after release
+        oscillators.push(osc);
     }
     // Optional tremolo (Rhodes-style) modulating the amp gain.
     if (cfg.tremolo > 0) {
@@ -236,7 +241,7 @@ function pianoVoice(ctx, dest, pitch, velocity, when, duration, voice) {
         lfo.connect(lfoGain);
         lfoGain.connect(amp.gain);
         lfo.start(when);
-        lfo.stop(releaseEnd);
+        oscillators.push(lfo);
     }
     // Hammer transient: a filtered noise tick that keeps the attack lively.
     if (cfg.hammer > 0) {
@@ -249,6 +254,7 @@ function pianoVoice(ctx, dest, pitch, velocity, when, duration, voice) {
             q: 0.9,
         });
     }
+    return { oscillators, amp, releaseEnd };
 }
 const BASS_CONFIGS = {
     finger: {
@@ -281,22 +287,25 @@ const BASS_CONFIGS = {
  * Synthesized bass. The note is shaped by `duration` (like the piano) and
  * colored by `voice`: a rounded finger tone, an aggressive pick, a bright
  * slap, a gliding 808 sub, or a filtered synth bass.
+ * Returns oscillators and amp for proper release.
  */
 function bassVoice(ctx, dest, pitch, velocity, when, duration, voice) {
     const cfg = BASS_CONFIGS[voice] ?? BASS_CONFIGS.finger;
     const freq = Math.max(25, midiToHz(pitch));
     const nyquist = Math.max(2000, ctx.sampleRate / 2 - 200);
     const peak = 0.5 * Math.max(0.08, Math.min(1, velocity));
+    // Always use sustain-style envelope: hold at sustain level until release is triggered
     const dur = Math.max(0.06, Math.min(8, duration));
-    const releaseEnd = when + dur + cfg.release;
     const decayTo = when + Math.min(0.22 + dur * 0.35, (dur + cfg.release) * 0.55);
     const hold = Math.max(0.0002, peak * cfg.decayPeak);
+    // Release will be triggered by stopNote; this is the max time we'll wait
+    const releaseEnd = when + dur + cfg.release + 5; // 5s max additional time for release
     const amp = ctx.createGain();
     const g = amp.gain;
     g.setValueAtTime(0.0001, when);
     g.linearRampToValueAtTime(peak, when + cfg.attack);
     g.exponentialRampToValueAtTime(hold, decayTo);
-    g.exponentialRampToValueAtTime(0.0001, releaseEnd);
+    // NOTE: Release ramp is NOT scheduled here - it will be triggered by stopNote
     // The pluck opens the filter and lets it close again — that sag is what
     // makes a synth bass read as a bass instead of a organ.
     const filter = ctx.createBiquadFilter();
@@ -306,6 +315,7 @@ function bassVoice(ctx, dest, pitch, velocity, when, duration, voice) {
     filter.frequency.exponentialRampToValueAtTime(Math.max(80, Math.min(nyquist, freq * cfg.filterEnd + 90)), decayTo);
     amp.connect(filter);
     filter.connect(dest);
+    const oscillators = [];
     for (const [type, ratio, level] of cfg.partials) {
         const osc = ctx.createOscillator();
         osc.type = type;
@@ -324,7 +334,8 @@ function bassVoice(ctx, dest, pitch, velocity, when, duration, voice) {
         osc.connect(pg);
         pg.connect(amp);
         osc.start(when);
-        osc.stop(releaseEnd + 0.02);
+        // Don't schedule osc.stop here - will be done in stopNote after release
+        oscillators.push(osc);
     }
     // String / pick transient, kept outside the filter so it stays crisp.
     if (cfg.brightness > 0) {
@@ -337,6 +348,7 @@ function bassVoice(ctx, dest, pitch, velocity, when, duration, voice) {
             q: 0.9,
         });
     }
+    return { oscillators, amp, releaseEnd };
 }
 const KIT_CHARACTERS = {
     standard: { amp: 1, decay: 1, freq: 1 },
@@ -435,17 +447,19 @@ function drumVoice(ctx, dest, pitch, velocity, when, kit) {
  * Schedule one instrument voice. `duration` shapes the piano and bass notes;
  * drums use their own fixed decays. `voice` selects the timbre (piano), kit
  * (drums) or bass character; unknown ids fall back to the default.
+ * Returns the created oscillators for proper stopping (piano/bass only).
  */
 export function scheduleVoice(ctx, destination, kind, pitch, velocity, when, duration, voice) {
     const clamped = Math.max(0, Math.min(127, Math.round(pitch)));
     const at = Math.max(when, ctx.currentTime);
     if (kind === 'piano') {
-        pianoVoice(ctx, destination, clamped, velocity, at, duration, voice || 'epiano');
+        return pianoVoice(ctx, destination, clamped, velocity, at, duration, voice || 'epiano');
     }
     else if (kind === 'bass') {
-        bassVoice(ctx, destination, clamped, velocity, at, duration, voice || 'finger');
+        return bassVoice(ctx, destination, clamped, velocity, at, duration, voice || 'finger');
     }
     else {
         drumVoice(ctx, destination, clamped, velocity, at, voice || 'standard');
+        return { oscillators: [], amp: ctx.createGain(), releaseEnd: at + 1 };
     }
 }

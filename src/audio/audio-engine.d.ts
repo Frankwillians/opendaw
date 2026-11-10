@@ -110,6 +110,20 @@ export interface PluginRestoreInfo {
     enabled?: boolean;
     params?: PluginParamInfo[];
 }
+/** A clip on a track's timeline in the audio engine. */
+interface EngineClip {
+    id: string;
+    buffer: AudioBuffer | null;
+    bufferLabel: string;
+    clipStart: number;
+    clipDuration: number;
+    fadeIn: number;
+    fadeOut: number;
+    takes: Array<{
+        id: string;
+        buffer: AudioBuffer;
+    }>;
+}
 export interface SendConfig {
     rvDecay: number;
     dlTime: number;
@@ -817,6 +831,47 @@ export declare class AudioEngine {
     playClick(accent?: boolean, when?: number): void;
     setBuffer(id: string, buffer: AudioBuffer | null, label?: string): void;
     /**
+     * Adds a new clip to the track's timeline (Reaper-style items).
+     * Returns the clip ID.
+     */
+    addClip(id: string, clip: {
+        buffer: AudioBuffer;
+        bufferLabel: string;
+        clipStart: number;
+        clipDuration: number;
+        fadeIn: number;
+        fadeOut: number;
+    }, clipId?: string): string;
+    /**
+     * Removes a clip from the track's timeline.
+     */
+    removeClip(id: string, clipId: string): void;
+    /** The stored sample of a lane, dry, as the razor and the moves see it. */
+    getBuffer(id: string): AudioBuffer | null;
+    getClip(id: string, clipId: string): EngineClip | null;
+    /**
+     * Inserts or updates a clip keeping the caller's id — the project state is
+     * the source of truth and the engine mirrors it. A null buffer keeps the
+     * sample the clip already holds (rehydrate fills it in afterwards).
+     */
+    upsertClip(id: string, clip: {
+        id: string;
+        buffer: AudioBuffer | null;
+        bufferLabel: string;
+        clipStart: number;
+        clipDuration: number;
+        fadeIn: number;
+        fadeOut: number;
+    }): void;
+    /** Moves one clip's start without touching the lane's other clips. */
+    setClipStartFor(id: string, clipId: string, step: number): void;
+    /** Trims one clip against its own sample, not the lane's legacy buffer. */
+    setClipDurationFor(id: string, clipId: string, seconds: number): void;
+    /** Copies a range of one clip's sample into a fresh buffer (same-lane razor). */
+    sliceClipBuffer(id: string, clipId: string, from: number, to: number): AudioBuffer | null;
+    /** Legacy fields follow the last clip so older paths keep seeing audio. */
+    private mirrorLegacyFromClips;
+    /**
      * Put a rendered pass in front of the speakers and the export without
      * touching the recorded clip. Passing null gives the dry take back.
      */
@@ -983,6 +1038,7 @@ export declare class AudioEngine {
      */
     sliceBuffer(id: string, from: number, to: number): AudioBuffer | null;
     private clipEnd;
+    private clipEndForClip;
     hasBuffer(id: string): boolean;
     /**
      * Schedules every recorded clip relative to the song position.
@@ -1002,6 +1058,8 @@ export declare class AudioEngine {
     /** Plays one synth voice through the track's full signal chain. */
     playNote(trackId: string, kind: InstrumentKind, pitch: number, velocity: number, when: number, duration: number): void;
     private voice;
+    /** Stops a specific voice by trackId and pitch (for key release). Triggers release envelope. */
+    stopNote(trackId: string, pitch: number): void;
     /** Silences every in-flight instrument voice (seek / stop / loop restart). */
     stopNotes(): void;
     /**

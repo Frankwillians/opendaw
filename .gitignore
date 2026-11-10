@@ -39,3 +39,5 @@ desktop/tools/icon-out/
 desktop/exe-build.log
 desktop/repack-final.log
 desktop/make-icon.cjs
+.vercel
+.env*
