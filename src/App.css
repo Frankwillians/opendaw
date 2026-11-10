@@ -5241,6 +5241,61 @@ button {
   min-height: 300px;
 }
 
+/* Embedded VST UI in the chain row — small card-sized interface */
+.native-vst-row {
+  /* Allow the row to expand for embedded UI */
+}
+
+.native-vst-embedded {
+  margin-top: 4px;
+  border: 1px solid #3d4b5a;
+  border-radius: 3px;
+  background: #1c2128;
+  overflow: hidden;
+}
+
+.native-vst-stage.embedded {
+  min-height: 180px;
+  max-height: 220px;
+  border: none;
+  border-radius: 0;
+  background: #1b1f25;
+  padding: 0;
+}
+
+.native-vst-stage.embedded .native-vst-stage-bar {
+  padding: 4px 6px;
+  font-size: 10px;
+  border-bottom: 1px solid #3d4b5a;
+}
+
+.native-vst-stage.embedded .native-vst-stage-name {
+  font-size: 10px;
+}
+
+.native-vst-stage.embedded .native-vst-stage-size,
+.native-vst-stage.embedded .native-vst-stage-hint {
+  font-size: 9px;
+  color: #6d7b89;
+}
+
+.native-vst-stage.embedded .native-vst-stage-canvas {
+  min-height: 140px;
+  min-width: 0;
+  width: 100%;
+}
+
+.native-vst-row-gui.embedded {
+  border-color: #4a7aa8;
+  color: #cfe3f5;
+  background: #2b3a49;
+}
+
+/* Make the row expand to fit embedded UI */
+.native-vst-row:has(.native-vst-embedded) {
+  padding-bottom: 4px;
+}
+
 /* ---------------- THE FX WINDOW AS A WINDOW ----------------
    A rack you cannot move is a rack you cannot work next to, and one you cannot
    put away is a rack that owns the arrangement. The header is the handle — the

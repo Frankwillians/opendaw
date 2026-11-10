@@ -207,7 +207,7 @@ interface StageProps {
  * dragged or resized, the panel is minimised — and the native window is only moved
  * when it really needs moving.
  */
-function NativeVstFaceStage({ face, sampleRate, onClose, report, refuse }: StageProps): React.JSX.Element {
+export function NativeVstFaceStage({ face, sampleRate, onClose, report, refuse, embedded = false }: StageProps & { embedded?: boolean }): React.JSX.Element {
   const [api] = useState(() => pluginApi())
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const placed = useRef({ x: 0, y: 0, width: 0, height: 0 })
@@ -228,7 +228,8 @@ function NativeVstFaceStage({ face, sampleRate, onClose, report, refuse }: Stage
   const visibleRect = (): { x: number; y: number; width: number; height: number } | null => {
     const box = canvasRef.current?.getBoundingClientRect()
     if (!box || box.width < 8 || box.height < 8) return null
-    const clip = canvasRef.current?.closest('.native-vst-faces')?.getBoundingClientRect()
+    const clipSelector = embedded ? '.native-vst-row' : '.native-vst-faces'
+    const clip = canvasRef.current?.closest(clipSelector)?.getBoundingClientRect()
     const left = Math.max(box.left, clip?.left ?? box.left)
     const top = Math.max(box.top, clip?.top ?? box.top)
     const right = Math.min(box.right, clip?.right ?? box.right)
@@ -237,12 +238,22 @@ function NativeVstFaceStage({ face, sampleRate, onClose, report, refuse }: Stage
     const height = Math.round(bottom - top)
     // A sliver of a plugin is not an interface: below this the window is put away
     // rather than squashed into someone else's corner.
-    if (width < 8 || height < 48) return null
+    const minHeight = embedded ? 24 : 48
+    if (width < 8 || height < minHeight) return null
     return { x: Math.round(left), y: Math.round(top), width, height }
   }
 
-  const stageRect = (): { x: number; y: number; width: number; height: number } =>
-    visibleRect() ?? { x: 120, y: 120, width: 640, height: 360 }
+  const stageRect = (): { x: number; y: number; width: number; height: number } => {
+    if (embedded) {
+      // For embedded mode, use a smaller default rect that fits in the card
+      const box = canvasRef.current?.getBoundingClientRect()
+      if (box && box.width > 8 && box.height > 8) {
+        return { x: Math.round(box.left), y: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) }
+      }
+      return { x: 120, y: 120, width: 400, height: 200 }
+    }
+    return visibleRect() ?? { x: 120, y: 120, width: 640, height: 360 }
+  }
 
   // The press and the answer: `gui-open` is the call that loads the toolkit, so it
   // runs once per face, and the answer decides what the bar says.
@@ -367,7 +378,7 @@ function NativeVstFaceStage({ face, sampleRate, onClose, report, refuse }: Stage
   // from the page rather than guessed at from the order they happen to come in.
   return (
     <div
-      className={`native-vst-stage open${face.phase === 'pending' ? ' pending' : ''}`}
+      className={`native-vst-stage open${face.phase === 'pending' ? ' pending' : ''}${embedded ? ' embedded' : ''}`}
       data-face-key={face.key}
       data-face-path={face.path}
     >
@@ -386,14 +397,16 @@ function NativeVstFaceStage({ face, sampleRate, onClose, report, refuse }: Stage
               <span className="plugin-live">{face.values.length} valores lidos do plugin</span>
             ) : null}
             <span className="native-vst-stage-hint">
-              a interface está sobre esta área — role ou mova o OpenDAW que a janela acompanha
+              {embedded
+                ? 'interface incorporada no cartão — clique UI para abrir maior'
+                : 'a interface está sobre esta área — role ou mova o OpenDAW que a janela acompanha'}
             </span>
           </>
         )}
         <button
           type="button"
           className="mini-btn"
-          title="Fechar a interface deste plugin"
+          title={embedded ? 'Fechar interface incorporada' : 'Fechar a interface deste plugin'}
           onClick={() => onClose(face.key)}
         >
           ✕
