@@ -1,5 +1,22 @@
 node_modules
 .git
+.vercel
 *.log
 *.tmp
 __pycache__
+
+# Pacotes do desktop (exe, portátil, instalador, testes) — não vão para a web
+release
+dist
+desktop/node_modules
+desktop/vendor
+desktop/build-res
+desktop/selftest-*
+desktop/spike-*
+*.exe
+*.zip
+*.pak
+*.dll
+*.node
+*.wav
+*.blockmap
