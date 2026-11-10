@@ -98,7 +98,6 @@ import {
   watchMidiConnections,
 } from './midi/midi-input'
 import type { MidiDeviceInfo } from './midi/midi-input'
-import NativeVstChain from './desktop/NativeVstChain'
 import PluginPanel from './desktop/PluginPanel'
 import VstBrowserModal from './desktop/VstBrowserModal'
 import NativeVstFaces, { faceKeyOf, useNativeFaces } from './desktop/NativeVstFaces'
@@ -890,6 +889,39 @@ function builtinChainId(id: BuiltinFxId): string {
   return `fx:${id}`
 }
 
+/** A native VST slot takes part in the one signal chain under this key. */
+function nativeChainKey(id: string): string {
+  return `nvs:${id}`
+}
+
+/**
+ * Reconcile the chain's native keys with the slots that actually exist: a key
+ * whose slot was removed leaves the chain, a slot the order list forgot joins it
+ * at the end. The relative order of the keys that survive is kept untouched.
+ */
+function chainWithNativeKeys(chain: string[], slots: NativeVstSlot[]): string[] {
+  const alive = new Set(slots.map((slot) => nativeChainKey(slot.id ?? slot.path)))
+  const next = chain.filter((entry) => !entry.startsWith('nvs:') || alive.has(entry))
+  for (const slot of slots) {
+    const key = nativeChainKey(slot.id ?? slot.path)
+    if (!next.includes(key)) next.push(key)
+  }
+  return next
+}
+
+/**
+ * The native slots in the order the one chain draws them. The plugin process
+ * reads `nativeChain`, so this keeps that array following the chain's nvs keys;
+ * a slot the chain has no key for yet keeps its place at the end.
+ */
+function nativeSlotsInChainOrder(slots: NativeVstSlot[], chain: string[]): NativeVstSlot[] {
+  const position = (slot: NativeVstSlot): number => {
+    const index = chain.indexOf(nativeChainKey(slot.id ?? slot.path))
+    return index < 0 ? Number.MAX_SAFE_INTEGER : index
+  }
+  return [...slots].sort((a, b) => position(a) - position(b))
+}
+
 /**
  * Chain orderings. A noise gate before a compressor is a different tool than a
  * noise gate after one, so the sequence is worth presets of its own - but only
@@ -1190,6 +1222,7 @@ function chainWithPlugin(track: TrackState, pluginId: string): string[] {
 type ChainDisplayEntry =
   | { key: string; kind: 'builtin'; id: BuiltinFxId }
   | { key: string; kind: 'plugin'; plugin: PluginState }
+  | { key: string; kind: 'native'; slot: NativeVstSlot }
 
 function chainEntriesFor(track: TrackState): ChainDisplayEntry[] {
   const entries: ChainDisplayEntry[] = []
@@ -1201,12 +1234,24 @@ function chainEntriesFor(track: TrackState): ChainDisplayEntry[] {
       if (!BUILTIN_FX_IDS.includes(id)) continue
       seen.add(entry)
       entries.push({ key: entry, kind: 'builtin', id })
+    } else if (entry.startsWith('nvs:')) {
+      const slot = track.nativeChain.find((item) => nativeChainKey(item.id ?? item.path) === entry)
+      if (!slot) continue
+      seen.add(entry)
+      entries.push({ key: entry, kind: 'native', slot })
     } else {
       const plugin = track.plugins.find((item) => item.id === entry)
       if (!plugin) continue
       seen.add(entry)
       entries.push({ key: entry, kind: 'plugin', plugin })
     }
+  }
+  // A native slot the order list forgot still belongs on the chain, like a NAM.
+  for (const slot of track.nativeChain) {
+    const key = nativeChainKey(slot.id ?? slot.path)
+    if (seen.has(key)) continue
+    seen.add(key)
+    entries.push({ key, kind: 'native', slot })
   }
   // Built-ins are only ever what the chain says: the producer adds and removes
   // them, so a card that is not in the list is not in the window. Plugins are
@@ -5445,8 +5490,32 @@ export default function App() {
   const setNativeVstChain = (trackId: string, next: NativeVstSlot[]) => {
     commitTracks(
       tracksRef.current.map((track) =>
-        track.id === trackId ? { ...track, nativeChain: next } : track,
+        track.id === trackId
+          ? { ...track, nativeChain: next, chain: chainWithNativeKeys(track.chain, next) }
+          : track,
       ),
+    )
+  }
+
+  /** Bypass one native slot without touching its place in the chain. */
+  const toggleNativeBypass = (trackId: string, slotId: string) => {
+    const track = tracksRef.current.find((item) => item.id === trackId)
+    if (!track) return
+    setNativeVstChain(
+      trackId,
+      track.nativeChain.map((slot) =>
+        (slot.id ?? slot.path) === slotId ? { ...slot, bypass: !slot.bypass } : slot,
+      ),
+    )
+  }
+
+  /** Pull a native slot out of the chain; its window goes with it (faces effect). */
+  const removeNativeSlot = (trackId: string, slotId: string) => {
+    const track = tracksRef.current.find((item) => item.id === trackId)
+    if (!track) return
+    setNativeVstChain(
+      trackId,
+      track.nativeChain.filter((slot) => (slot.id ?? slot.path) !== slotId),
     )
   }
 
@@ -6043,7 +6112,7 @@ export default function App() {
     const [entry] = next.splice(index, 1)
     next.splice(target, 0, entry)
     engineRef.current?.setChainOrder(trackId, next)
-    commitChain(trackId, () => next)
+    commitChainWithNative(trackId, next)
   }
 
   // Drag-and-drop reordering: rebuild from the normalized entry order so the
@@ -6060,7 +6129,26 @@ export default function App() {
     const [entry] = next.splice(from, 1)
     next.splice(to, 0, entry)
     engineRef.current?.setChainOrder(trackId, next)
-    commitChain(trackId, () => next)
+    commitChainWithNative(trackId, next)
+  }
+
+  /**
+   * Commit a new chain order and keep the native slots following it: the plugin
+   * process reads `nativeChain`, so reordering a VST card past an EQ card has to
+   * move the slot in that array too, or the sound would ignore the drawing.
+   */
+  const commitChainWithNative = (trackId: string, nextChain: string[]) => {
+    commitTracks(
+      tracksRef.current.map((track) =>
+        track.id === trackId
+          ? {
+              ...track,
+              chain: nextChain,
+              nativeChain: nativeSlotsInChainOrder(track.nativeChain, nextChain),
+            }
+          : track,
+      ),
+    )
   }
 
   /**
@@ -14787,6 +14875,148 @@ export default function App() {
                         </div>
                       )
                     })()
+                  ) : item.kind === 'native' ? (
+                    (() => {
+                      const slot = item.slot
+                      const slotId = slot.id ?? slot.path
+                      const faceKey = faceKeyOf(slot)
+                      const faceUp = nativeFaces.isOpen(faceKey)
+                      const facePending = nativeFaces.face(faceKey)?.phase === 'pending'
+                      const faceError = nativeFaces.errorOf(faceKey)
+                      const kind = /\.vst3([\\/]|$)/i.test(slot.path) ? 'VST3' : 'VST2'
+                      const live = slot.id ? (liveVst[fxTrack.id] ?? {})[slot.id] : undefined
+                      return (
+                        <div
+                          key={item.key}
+                          data-vst-path={slot.path}
+                          className={`chain-card card-vst ${slot.bypass ? 'bypassed' : ''} ${
+                            dragOverKey === item.key && dragChainKeyRef.current !== item.key
+                              ? 'drop-target'
+                              : ''
+                          }`}
+                          onDragOver={(event) => {
+                            event.preventDefault()
+                            if (dragChainKeyRef.current && dragChainKeyRef.current !== item.key) {
+                              setDragOverKey(item.key)
+                            }
+                          }}
+                          onDragLeave={() =>
+                            setDragOverKey((key) => (key === item.key ? null : key))
+                          }
+                          onDrop={(event) => {
+                            event.preventDefault()
+                            const from = dragChainKeyRef.current
+                            setDragOverKey(null)
+                            dragChainKeyRef.current = null
+                            if (from) reorderChainTo(fxTrack.id, from, item.key)
+                          }}
+                        >
+                          <div
+                            className="card-head"
+                            draggable
+                            onDragStart={() => {
+                              dragChainKeyRef.current = item.key
+                            }}
+                            onDragEnd={() => {
+                              dragChainKeyRef.current = null
+                              setDragOverKey(null)
+                            }}
+                            title="Arraste o cartão para reordenar a cadeia"
+                          >
+                            <button
+                              type="button"
+                              className={`led ${slot.bypass ? '' : 'on'}`}
+                              title={
+                                slot.bypass
+                                  ? 'Bypass — clique para ativar'
+                                  : 'Ativo — clique para bypass'
+                              }
+                              onClick={() => toggleNativeBypass(fxTrack.id, slotId)}
+                            />
+                            <span className="card-idx">{index + 1}</span>
+                            <span className={`card-kind kind-${kind.toLowerCase()}`}>{kind}</span>
+                            <span className="card-name" title={slot.path}>
+                              {slot.name || slot.path}
+                            </span>
+                            <button
+                              type="button"
+                              className={`mini-btn native-ui-btn ${faceUp ? 'active' : ''}`}
+                              title={
+                                faceUp
+                                  ? 'Fechar a interface deste plugin'
+                                  : 'Abrir a interface deste plugin no painel ao lado'
+                              }
+                              onClick={() => nativeFaces.toggle(slot)}
+                            >
+                              {facePending ? '…' : 'UI'}
+                            </button>
+                            <span className="card-move">
+                              <button
+                                type="button"
+                                className="mini-btn"
+                                title="Mover para antes na cadeia"
+                                disabled={index === 0}
+                                onClick={() => moveChainStage(fxTrack.id, item.key, -1)}
+                              >
+                                ◀
+                              </button>
+                              <button
+                                type="button"
+                                className="mini-btn"
+                                title="Mover para depois na cadeia"
+                                disabled={index === fxChainEntries.length - 1}
+                                onClick={() => moveChainStage(fxTrack.id, item.key, 1)}
+                              >
+                                ▶
+                              </button>
+                            </span>
+                            <button
+                              type="button"
+                              className="mini-btn danger chain-remove"
+                              title={`Tirar ${slot.name || slot.path} da cadeia`}
+                              aria-label={`Remover ${slot.name || slot.path} da cadeia`}
+                              onClick={() => removeNativeSlot(fxTrack.id, slotId)}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                          <div className="card-vst-body">
+                            {faceError ? (
+                              <span className="vst-live off" title={faceError}>
+                                ○ {faceError}
+                              </span>
+                            ) : live && !live.error ? (
+                              <span
+                                className="vst-live on"
+                                title={`Sessão ao vivo: ${live.answered}/${live.batches} lotes respondidos${live.underruns > 0 ? ` · ${live.underruns} underruns` : ''}`}
+                              >
+                                ● Ao vivo ({Math.round(live.latencyMs)}ms)
+                              </span>
+                            ) : live?.error ? (
+                              <span className="vst-live off" title={live.error}>
+                                ○ Seco: {live.error}
+                              </span>
+                            ) : kind === 'VST3' ? (
+                              <span
+                                className="vst-live idle"
+                                title="VST3 não roda ao vivo neste host — entra no passe do clipe"
+                              >
+                                · VST3: só no passe do clipe
+                              </span>
+                            ) : (
+                              <span className="vst-live idle" title="Arme o monitor da lane para a sessão ao vivo">
+                                · Aguardando o monitor da lane
+                              </span>
+                            )}
+                            <span className="vst-face-hint">
+                              {faceUp
+                                ? 'A interface está no painel ao lado da cadeia.'
+                                : 'UI abre a janela do plugin; os knobs dele valem no áudio.'}
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    })()
                   ) : (
                     <div
                       key={item.key}
@@ -14983,19 +15213,51 @@ export default function App() {
                 <div className="chain-endpoint">OUT</div>
               </div>
 
-              {isNativeApp() && fxTrack.kind === 'audio' ? (
-                <NativeVstChain
-                  trackName={fxTrack.name}
-                  chain={fxTrack.nativeChain}
-                  sampleRate={engineRef.current?.ctx.sampleRate ?? 48000}
-                  hasClip={Boolean(fxTrack.bufferId) && fxTrack.clipDuration > 0}
-                  busy={Boolean(bouncingVst[fxTrack.id])}
-                  preview={nativePreview[fxTrack.id] ?? null}
-                  liveStates={liveVst[fxTrack.id] ?? {}}
-                  onChange={(next) => setNativeVstChain(fxTrack.id, next)}
-                  onBounce={() => void applyNativeVstToClip(fxTrack.id)}
-                  onPreviewRetry={() => retryNativePreview(fxTrack.id)}
-                />
+              {isNativeApp() && fxTrack.kind === 'audio' && activeNativeSlots(fxTrack.nativeChain).length > 0 ? (
+                <div className="native-chain-footer">
+                  <div className={`native-vst-preview ${(nativePreview[fxTrack.id]?.state) ?? 'idle'}`}>
+                    <span className="preview-state">
+                      {nativePreview[fxTrack.id]?.state === 'busy'
+                        ? `Pré-escuta: passando o clipe pelos ${activeNativeSlots(fxTrack.nativeChain).length} plugin(s)…`
+                        : nativePreview[fxTrack.id]?.state === 'on'
+                          ? `Pré-escuta ativa · pico ${(nativePreview[fxTrack.id]?.peak ?? 0).toFixed(3)} — é este áudio que toca e que vai para o WAV`
+                          : nativePreview[fxTrack.id]?.state === 'error'
+                            ? `A pré-escuta não veio: ${nativePreview[fxTrack.id]?.error}`
+                            : Boolean(fxTrack.bufferId) && fxTrack.clipDuration > 0
+                              ? 'Pré-escuta: preparando o passe da cadeia…'
+                              : 'Pré-escuta: a lane ainda não tem clipe para a cadeia atravessar'}
+                    </span>
+                    {nativePreview[fxTrack.id]?.state === 'error' ? (
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        onClick={() => retryNativePreview(fxTrack.id)}
+                        title="Passa o clipe pela cadeia de novo"
+                      >
+                        ↻ tentar de novo
+                      </button>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    className="reaper-btn highlight"
+                    onClick={() => void applyNativeVstToClip(fxTrack.id)}
+                    disabled={
+                      Boolean(bouncingVst[fxTrack.id]) ||
+                      !fxTrack.bufferId ||
+                      fxTrack.clipDuration <= 0
+                    }
+                    title={
+                      !fxTrack.bufferId || fxTrack.clipDuration <= 0
+                        ? 'A lane precisa de um clipe'
+                        : `Passa o clipe pelos ${activeNativeSlots(fxTrack.nativeChain).length} plugin(s), um depois do outro, e cria um novo take`
+                    }
+                  >
+                    {bouncingVst[fxTrack.id]
+                      ? 'Processando…'
+                      : 'Aplicar a cadeia ao clipe (bounce)'}
+                  </button>
+                </div>
               ) : null}
 
               <div className="plugin-note">
