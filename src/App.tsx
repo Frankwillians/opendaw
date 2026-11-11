@@ -3817,7 +3817,8 @@ export default function App() {
           // cannot overlap the next loop iteration. The lanes keep their state:
           // this stop is only the other half of an immediate restart.
           engine.stopBuffers(true)
-          engine.startBuffersAt(nextTimeRef.current, stepDuration, loopStartStep)
+          // Pass loopEndStep so the engine only schedules clips within the selection
+          engine.startBuffersAt(nextTimeRef.current, stepDuration, loopStartStep, selectionLoop ? loopEndStep : undefined)
         } else {
           const stopDelay = (nextTimeRef.current - engine.ctx.currentTime) * 1000
           nextStepRef.current = 0

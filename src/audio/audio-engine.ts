@@ -4898,8 +4898,9 @@ export class AudioEngine {
   /**
    * Schedules every recorded clip relative to the song position.
    * `stepDuration` is the length of a 16th note in seconds.
+   * `toStep` limits scheduling to clips that start before this step (for selection loops).
    */
-  startBuffersAt(when: number, stepDuration: number, fromStep: number): void {
+  startBuffersAt(when: number, stepDuration: number, fromStep: number, toStep?: number): void {
     // Automation is written in steps and scheduled in seconds; this is the
     // translation for the pass that is about to start.
     this.songStepDuration = stepDuration > 0 ? stepDuration : 0.125
@@ -4937,6 +4938,12 @@ export class AudioEngine {
         // re-triggered with an offset - they either already played or are outside
         // the selection region being looped.
         if (fromStep > 0 && clip.clipStart < fromStep) {
+          continue
+        }
+        // If toStep is provided (selection loop), only schedule clips that start
+        // before the loop end. Clips at or after toStep belong to the next loop
+        // iteration or are outside the selection.
+        if (toStep !== undefined && clip.clipStart >= toStep) {
           continue
         }
         if (delta >= 0) {
