@@ -45,7 +45,7 @@ import {
   sortedAutomation,
 } from './mix-math'
 import type { AutomationBreakpoint } from './mix-math'
-import { clipEnd as clipEndOf } from './mix-math'
+import { clipEnd as clipEndOf, clipSelectionTiming } from './mix-math'
 import { measureLoudness } from './loudness'
 import type { LoudnessReport } from './loudness'
 import { SIDECHAIN_PROCESSOR_NAME, SIDECHAIN_WORKLET_SOURCE } from './sidechain-worklet'
@@ -4940,23 +4940,21 @@ export class AudioEngine {
         const clipEndStep = clip.clipStart + this.clipEndForClip(clip) / stepDuration
 
         if (isSelectionLoop) {
-          // Selection loop: find overlap between clip and loop region [loopStart, loopEnd)
-          const overlapStart = Math.max(clip.clipStart, loopStart)
-          const overlapEnd = Math.min(clipEndStep, loopEnd)
-          if (overlapStart >= overlapEnd) continue // No overlap with loop region
+          const timing = clipSelectionTiming(
+            clip.clipStart,
+            clipEndStep,
+            loopStart,
+            loopEnd,
+            when,
+            stepDuration,
+          )
+          if (!timing) continue
 
-          // Schedule only the overlapping portion
-          const offsetSteps = overlapStart - clip.clipStart
-          const durationSteps = overlapEnd - overlapStart
-          const offsetSeconds = offsetSteps * stepDuration
-          const durationSeconds = durationSteps * stepDuration
-
-          source.start(when, offsetSeconds, Math.max(0.02, durationSeconds))
-          // Fades are relative to the clip, so we need to map them to the loop region
-          // For simplicity, apply fade at loop boundaries if the overlap touches clip edges
-          const fadeIn = overlapStart === clip.clipStart ? clip.fadeIn : 0
-          const fadeOut = overlapEnd === clipEndStep ? clip.fadeOut : 0
-          scheduleClipFade(shape, when, offsetSeconds, durationSeconds, fadeIn, fadeOut)
+          source.start(timing.startAt, timing.offset, Math.max(0.02, timing.duration))
+          // Fades belong to the clip edges, not to artificial loop boundaries.
+          const fadeIn = timing.atClipStart ? clip.fadeIn : 0
+          const fadeOut = timing.atClipEnd ? clip.fadeOut : 0
+          scheduleClipFade(shape, timing.startAt, timing.offset, timing.duration, fadeIn, fadeOut)
         } else {
           // Normal playback (from start or full arrangement loop)
           const end = this.clipEndForClip(clip)

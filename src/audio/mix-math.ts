@@ -41,6 +41,43 @@ export function clipEnd(clipDuration: number, bufferDuration: number): number {
   return Math.min(clipDuration, bufferDuration)
 }
 
+export interface ClipSelectionTiming {
+  /** AudioContext time at which this clip's selected portion begins. */
+  startAt: number
+  /** Seconds into the stored clip at which playback begins. */
+  offset: number
+  /** Selected clip duration in seconds. */
+  duration: number
+  atClipStart: boolean
+  atClipEnd: boolean
+}
+
+/**
+ * The part of a clip heard inside a half-open selection [loopStart, loopEnd).
+ * All step values use the transport's sixteenth-note grid. Keeping the audio
+ * time, buffer offset and clip-edge flags together prevents a clip beginning
+ * inside the selection from being moved to the selection's downbeat.
+ */
+export function clipSelectionTiming(
+  clipStart: number,
+  clipEnd: number,
+  loopStart: number,
+  loopEnd: number,
+  when: number,
+  stepDuration: number,
+): ClipSelectionTiming | null {
+  const overlapStart = Math.max(clipStart, loopStart)
+  const overlapEnd = Math.min(clipEnd, loopEnd)
+  if (!(stepDuration > 0) || overlapStart >= overlapEnd) return null
+  return {
+    startAt: when + (overlapStart - loopStart) * stepDuration,
+    offset: (overlapStart - clipStart) * stepDuration,
+    duration: (overlapEnd - overlapStart) * stepDuration,
+    atClipStart: overlapStart === clipStart,
+    atClipEnd: overlapEnd === clipEnd,
+  }
+}
+
 /**
  * Gain a clip's edge-fade envelope has at `clipTime` seconds after the start of
  * the *clip*. The live scheduler reproduces exactly this piecewise line with

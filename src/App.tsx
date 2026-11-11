@@ -3808,13 +3808,15 @@ export default function App() {
         // While recording the arrangement grows instead of wrapping, so a take
         // is never cut or split by the loop.
         if (isRecordingRef.current) continue
-        if (nextStepRef.current < totalSteps) continue
 
-        // Check if we should loop a selection instead of the whole arrangement
+        // The selection is the transport's real end while its loop is active.
+        // Waiting for totalSteps here made the painted playhead wrap at the
+        // selection while the scheduled clips ran on to the end of the song.
         const timeSel = timeSelRef.current
         const selectionLoop = loopRef.current && timeSel !== null && timeSel.to > timeSel.from
-        const loopEndStep = selectionLoop ? timeSel!.to : totalSteps
-        const loopStartStep = selectionLoop ? timeSel!.from : 0
+        const loopEndStep = selectionLoop ? Math.min(timeSel.to, totalSteps) : totalSteps
+        const loopStartStep = selectionLoop ? Math.min(timeSel.from, loopEndStep) : 0
+        if (nextStepRef.current < loopEndStep) continue
 
         if (loopRef.current) {
           nextStepRef.current = loopStartStep
@@ -3822,8 +3824,12 @@ export default function App() {
           // cannot overlap the next loop iteration. The lanes keep their state:
           // this stop is only the other half of an immediate restart.
           engine.stopBuffers(true)
-          // Pass loopEndStep so the engine only schedules clips within the selection
-          engine.startBuffersAt(nextTimeRef.current, stepDuration, loopStartStep, selectionLoop ? loopEndStep : undefined)
+          engine.startBuffersAt(
+            nextTimeRef.current,
+            stepDuration,
+            loopStartStep,
+            selectionLoop ? loopEndStep : undefined,
+          )
         } else {
           const stopDelay = (nextTimeRef.current - engine.ctx.currentTime) * 1000
           nextStepRef.current = 0
@@ -6760,7 +6766,12 @@ export default function App() {
     }
     const stepDuration = 60 / bpm / 4
     const totalSteps = Math.max(1, arrangementBarsRef.current * STEP_COUNT)
-    const start = Math.max(0, Math.min(totalSteps - 1, Math.round(fromStep)))
+    const selection = timeSelRef.current
+    const selectionLoop = loopRef.current && selection !== null && selection.to > selection.from
+    const start = Math.max(
+      0,
+      Math.min(totalSteps - 1, Math.round(selectionLoop ? selection.from : fromStep)),
+    )
     void engine.resume()
     const when = engine.ctx.currentTime + 0.08
     playheadRef.current = start
@@ -6799,12 +6810,11 @@ export default function App() {
     songStartRef.current = when - start * stepDuration
     nextStepRef.current = start
     nextTimeRef.current = when
-    // Respect selection loop if active
-    const sel = timeSelRef.current
-    if (sel && loopRef.current && sel.from !== sel.to) {
-      const fromStep = Math.floor(sel.from / stepDuration)
-      const toStep = Math.floor(sel.to / stepDuration)
-      engine.startBuffersAt(when, stepDuration, fromStep, toStep)
+    // Selection bounds are already sixteenth-note steps, exactly like `start`.
+    // Dividing them by stepDuration used to send the clip scheduler far beyond
+    // the arrangement instead of to the selected bars.
+    if (selectionLoop) {
+      engine.startBuffersAt(when, stepDuration, start, Math.min(selection.to, totalSteps))
     } else {
       engine.startBuffersAt(when, stepDuration, start)
     }

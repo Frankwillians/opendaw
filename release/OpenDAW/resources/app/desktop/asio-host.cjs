@@ -122,6 +122,15 @@ function ensure() {
   return startPromise
 }
 
+/**
+ * Inicializa o worker ASIO imediatamente (antes da criação da janela).
+ * Evita crash do worker quando utilityProcess é criado depois de BrowserWindow
+ * no Electron 45+.
+ */
+function init() {
+  return ensure()
+}
+
 function transferPort(port) {
   try {
     proc.postMessage({ cmd: 'attach-port' }, [port])
@@ -214,4 +223,4 @@ function shutdown() {
   }
 }
 
-module.exports = { request, attachPort, attachInPort, setStatusSink, setCrashSink, shutdown }
+module.exports = { request, attachPort, attachInPort, setStatusSink, setCrashSink, shutdown, init }

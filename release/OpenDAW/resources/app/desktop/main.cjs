@@ -3664,6 +3664,9 @@ if (!single) {
   })
   app.whenReady().then(async () => {
     app.setAppUserModelId('com.opendaw.studio')
+    // Initialize ASIO worker BEFORE window creation to avoid crash in Electron 45+
+    // (utilityProcess fork after BrowserWindow causes PortAudio/koffi crash)
+    await asioHost.init()
     await createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) void createWindow()

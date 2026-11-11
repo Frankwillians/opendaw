@@ -18,6 +18,7 @@ import {
   autoYToDb,
   clampRange,
   clipEnd,
+  clipSelectionTiming,
   dbToGain,
   fadeGainAt,
   formatDb,
@@ -83,6 +84,31 @@ test('a trimmed clip stops where the user dragged, never past the sample', () =>
 test('a clip on a missing buffer has nothing to play', () => {
   assert.equal(clipEnd(2, 0), 0)
   assert.equal(clipEnd(0, 0), 0)
+})
+
+test('selection playback starts inside a clip at the loop downbeat', () => {
+  assert.deepEqual(clipSelectionTiming(0, 64, 16, 32, 10, 0.125), {
+    startAt: 10,
+    offset: 2,
+    duration: 2,
+    atClipStart: false,
+    atClipEnd: false,
+  })
+})
+
+test('a clip beginning inside the selection keeps its timeline position', () => {
+  assert.deepEqual(clipSelectionTiming(20, 40, 16, 32, 10, 0.125), {
+    startAt: 10.5,
+    offset: 0,
+    duration: 1.5,
+    atClipStart: true,
+    atClipEnd: false,
+  })
+})
+
+test('clips outside the selection schedule nothing', () => {
+  assert.equal(clipSelectionTiming(0, 16, 16, 32, 10, 0.125), null)
+  assert.equal(clipSelectionTiming(32, 48, 16, 32, 10, 0.125), null)
 })
 
 // ------------------------------------------------------------------ fades

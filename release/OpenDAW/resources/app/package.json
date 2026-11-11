@@ -1,8 +1,8 @@
 {
   "name": "opendaw-desktop",
   "productName": "OpenDAW",
-  "version": "1.1.1",
-  "description": "OpenDAW — versão executável para PC, com hospedagem nativa de plugins VST.",
+  "version": "1.1.2",
+  "description": "OpenDAW â€” versÃ£o executÃ¡vel para PC, com hospedagem nativa de plugins VST.",
   "main": "desktop/main.cjs",
   "type": "commonjs",
   "private": true
