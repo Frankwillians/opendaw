@@ -3760,7 +3760,12 @@ export default function App() {
         } else if (absoluteStep >= 0 || pending === null) {
           if (pending !== null) {
             pendingBufferStartRef.current = null
-            engine.startBuffersAt(time, stepDuration, absoluteStep)
+            // Check if we should use selection loop for initial playback too
+            const timeSel = timeSelRef.current
+            const selectionLoop = loopRef.current && timeSel !== null && timeSel.to > timeSel.from
+            const loopEndStep = selectionLoop ? timeSel.to : undefined
+            const loopStartStep = selectionLoop ? timeSel.from : absoluteStep
+            engine.startBuffersAt(time, stepDuration, loopStartStep, loopEndStep)
             // The count-in bar is over: a take that was waiting for the downbeat
             // opens now, on the same audio clock the clicks were played from, and
             // is anchored to this step rather than to the clock's reading a few
