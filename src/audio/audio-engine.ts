@@ -4932,6 +4932,13 @@ export class AudioEngine {
 
         const end = this.clipEndForClip(clip)
         const delta = clip.clipStart - fromStep
+        // When fromStep > 0 (loop wrap), only schedule clips that start at or after
+        // the loop point. Clips starting before the loop point should not be
+        // re-triggered with an offset - they either already played or are outside
+        // the selection region being looped.
+        if (fromStep > 0 && clip.clipStart < fromStep) {
+          continue
+        }
         if (delta >= 0) {
           const t0 = when + delta * stepDuration
           source.start(t0, 0, Math.max(0.02, end))
