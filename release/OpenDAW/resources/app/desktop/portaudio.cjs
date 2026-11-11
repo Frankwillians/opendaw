@@ -25,7 +25,19 @@ const koffi = require('koffi')
 const path = require('node:path')
 const fs = require('node:fs')
 
-const DLL_PATH = path.join(__dirname, 'vendor', 'libportaudio64bit-asio.dll')
+/**
+ * Koffi faz LoadLibrary de verdade: um caminho dentro de app.asar não existe
+ * para o Windows. Se o app for empacotado com asar, o vendor precisa estar em
+ * app.asar.unpacked — e é de lá que o FFI tem de ler.
+ */
+function resolveDllPath() {
+  const packed = path.join(__dirname, 'vendor', 'libportaudio64bit-asio.dll')
+  if (!packed.includes('.asar')) return packed
+  const unpacked = packed.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1')
+  return fs.existsSync(unpacked) ? unpacked : packed
+}
+
+const DLL_PATH = resolveDllPath()
 
 /** PaHostApiTypeId (portaudio.h). */
 const HostApiType = {
