@@ -1,7 +1,7 @@
 {
   "name": "OpenDaw",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,6 +11,8 @@
     "app": "npm run build && npm --prefix desktop start",
     "app:test": "npm run build && npm --prefix desktop run selftest",
     "app:exe": "npm run build && node desktop/build-app.cjs",
+    "app:installer": "npm run build && npm --prefix desktop run build:installer",
+    "app:portable": "npm run build && npm --prefix desktop run build:portable",
     "deploy": "vite build && gh-pages -d dist"
   },
   "dependencies": {

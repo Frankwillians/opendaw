@@ -14983,36 +14983,53 @@ export default function App() {
                           <div className="card-vst-body">
                             {faceError ? (
                               <span className="vst-live off" title={faceError}>
-                                ○ {faceError}
+                                <i className="vst-live-dot" /> {faceError}
                               </span>
                             ) : live && !live.error ? (
                               <span
                                 className="vst-live on"
                                 title={`Sessão ao vivo: ${live.answered}/${live.batches} lotes respondidos${live.underruns > 0 ? ` · ${live.underruns} underruns` : ''}`}
                               >
-                                ● Ao vivo ({Math.round(live.latencyMs)}ms)
+                                <i className="vst-live-dot" /> Ao vivo
+                                <em>{Math.round(live.latencyMs)} ms</em>
                               </span>
                             ) : live?.error ? (
                               <span className="vst-live off" title={live.error}>
-                                ○ Seco: {live.error}
+                                <i className="vst-live-dot" /> Seco: {live.error}
                               </span>
                             ) : kind === 'VST3' ? (
                               <span
                                 className="vst-live idle"
                                 title="VST3 não roda ao vivo neste host — entra no passe do clipe"
                               >
-                                · VST3: só no passe do clipe
+                                <i className="vst-live-dot" /> VST3: só no passe do clipe
                               </span>
                             ) : (
                               <span className="vst-live idle" title="Arme o monitor da lane para a sessão ao vivo">
-                                · Aguardando o monitor da lane
+                                <i className="vst-live-dot" /> Aguardando o monitor da lane
                               </span>
                             )}
-                            <span className="vst-face-hint">
-                              {faceUp
-                                ? 'A interface está no painel ao lado da cadeia.'
-                                : 'UI abre a janela do plugin; os knobs dele valem no áudio.'}
-                            </span>
+                            <button
+                              type="button"
+                              className={`vst-face-note${faceUp ? ' on' : ''}`}
+                              data-kind={kind}
+                              onClick={() => nativeFaces.toggle(slot)}
+                              title={
+                                faceUp
+                                  ? 'Fechar a interface deste plugin'
+                                  : 'Abrir a interface deste plugin no painel ao lado'
+                              }
+                            >
+                              <b>UI</b>
+                              <span className="vst-face-note-copy">
+                                <strong>{faceUp ? 'Interface aberta' : 'Abrir interface'}</strong>
+                                <small>
+                                  {faceUp
+                                    ? 'no painel ao lado — clique para fechar'
+                                    : 'no painel ao lado da cadeia'}
+                                </small>
+                              </span>
+                            </button>
                           </div>
                         </div>
                       )

@@ -1,7 +1,7 @@
 {
   "name": "opendaw-desktop",
   "productName": "OpenDAW",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "OpenDAW — versão executável para PC, com hospedagem nativa de plugins VST.",
   "main": "main.cjs",
@@ -10,7 +10,61 @@
   "scripts": {
     "start": "electron .",
     "selftest": "electron . --selftest",
-    "spike-rt": "electron spike-rt-port.cjs"
+    "spike-rt": "electron spike-rt-port.cjs",
+    "build": "electron-builder",
+    "build:portable": "electron-builder --win portable",
+    "build:installer": "electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.opendaw.desktop",
+    "productName": "OpenDAW",
+    "copyright": "Copyright © 2025 OpenDAW",
+    "directories": {
+      "output": "release",
+      "buildResources": "build-resources"
+    },
+    "files": [
+      "*.cjs",
+      "vendor/**/*",
+      "icon.png",
+      "node_modules/koffi/**/*",
+      "node_modules/@koromix/koffi-win32-x64/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist",
+        "to": "dist",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "icon.png",
+      "artifactName": "OpenDAW-${version}-${os}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OpenDAW",
+      "uninstallDisplayName": "OpenDAW",
+      "license": "LICENSE",
+      "artifactName": "OpenDAW-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "OpenDAW-Portable-${version}.${ext}"
+    }
   },
   "dependencies": {
     "koffi": "^3.3.6"

@@ -87,8 +87,6 @@ export default function NativeVstChain({
    */
   const [selected, setSelected] = useState<string | null>(chain[0]?.id ?? null)
   const [adding, setAdding] = useState(chain.length === 0)
-  /** Which slots have their UI embedded in the row (small card). */
-  const [embeddedFaces, setEmbeddedFaces] = useState<Set<string>>(new Set())
 
   // Rows appear and go away from outside this component too — a project loading,
   // an undo step — so the selection follows the chain instead of pointing at a
@@ -126,6 +124,7 @@ export default function NativeVstChain({
     faces,
     close: closeFace,
     toggle: toggleFace,
+    toggleEmbedded,
     errorOf,
     report,
     refuse,
@@ -203,10 +202,7 @@ export default function NativeVstChain({
   const live = shown?.id ? liveStates[shown.id] ?? null : null
   const liveRows = chain.filter((slot) => slot.id && liveStates[slot.id])
   const offLine = chain.filter((slot) => !slot.bypass && slotKind(slot.path) === 'VST3').length
-  const shownFace = shown
-    ? faces.find((face) => face.key === faceKeyOf(shown)) ??
-      (embeddedFaces.has(shown.id ?? '') ? { key: faceKeyOf(shown), path: shown.path, name: shown.name, phase: 'open' as const, width: 0, height: 0, values: [] } : null)
-    : null
+  const shownFace = shown ? faces.find((face) => face.key === faceKeyOf(shown)) ?? null : null
 
   return (
     <div className="native-vst-chain" ref={rootRef}>
@@ -237,7 +233,9 @@ export default function NativeVstChain({
           {chain.map((slot, index) => {
             const rowLive = slot.id ? liveStates[slot.id] ?? null : null
             const kind = slotKind(slot.path)
-            const faceUp = faces.some((face) => face.key === faceKeyOf(slot)) || embeddedFaces.has(slot.id ?? '')
+            const face = faces.find((face) => face.key === faceKeyOf(slot))
+            const faceUp = !!face
+            const isEmbedded = face?.embedded ?? false
             return (
               <div
                 className={`native-vst-row${slot.id === selected && !adding ? ' selected' : ''}${slot.bypass ? ' bypassed' : ''}`}
@@ -289,37 +287,18 @@ export default function NativeVstChain({
                     time. Lit when this row has a window up. */}
                 <button
                   type="button"
-                  className={`mini-btn native-vst-row-gui${embeddedFaces.has(slot.id ?? '') ? ' embedded' : faceUp ? ' active' : ''}`}
+                  className={`mini-btn native-vst-row-gui${isEmbedded ? ' embedded' : faceUp ? ' active' : ''}`}
                   title={
-                    embeddedFaces.has(slot.id ?? '')
+                    isEmbedded
                       ? 'Abrir a interface deste plugin na janela ao lado (maior)'
                       : faceUp
                       ? 'Fechar a interface deste plugin'
                       : 'Abrir a interface deste plugin pequena no cartão'
                   }
                   data-face-slot={slot.id ?? ''}
-                  onClick={() => {
-                    const slotId = slot.id ?? '';
-                    const isEmbedded = embeddedFaces.has(slotId);
-                    const isFloating = faces.some((face) => face.key === faceKeyOf(slot));
-                    if (!isEmbedded && !isFloating) {
-                      // none -> embedded
-                      setEmbeddedFaces((prev) => new Set(prev).add(slotId));
-                    } else if (isEmbedded && !isFloating) {
-                      // embedded -> floating
-                      setEmbeddedFaces((prev) => {
-                        const next = new Set(prev);
-                        next.delete(slotId);
-                        return next;
-                      });
-                      toggleFace(slot);
-                    } else if (!isEmbedded && isFloating) {
-                      // floating -> none
-                      toggleFace(slot);
-                    }
-                  }}
+                  onClick={() => toggleEmbedded(slot)}
                 >
-                  {embeddedFaces.has(slot.id ?? '') ? 'UI⌂' : 'UI'}
+                  {isEmbedded ? 'UI⌂' : 'UI'}
                 </button>
                 <span className="native-vst-row-move">
                   <button
@@ -350,18 +329,12 @@ export default function NativeVstChain({
                   ✕
                 </button>
                 {/* Embedded VST UI — shown when the user clicks UI to open small in the card */}
-                {embeddedFaces.has(slot.id ?? '') && (
+                {isEmbedded && face && (
                   <div className="native-vst-embedded">
                     <NativeVstFaceStage
-                      face={{ ...faces.find((f) => f.key === faceKeyOf(slot))!, key: faceKeyOf(slot), path: slot.path, name: slot.name }}
+                      face={face}
                       sampleRate={sampleRate}
-                      onClose={() => {
-                        setEmbeddedFaces((prev) => {
-                          const next = new Set(prev);
-                          next.delete(slot.id ?? '');
-                          return next;
-                        });
-                      }}
+                      onClose={() => toggleEmbedded(slot)}
                       report={report}
                       refuse={refuse}
                       embedded={true}
@@ -388,7 +361,7 @@ export default function NativeVstChain({
           REAPER hands a plugin the rest of the screen because an amp face drawn
           between knobs is unreadable, and here there may be several of them. */}
       <NativeVstFaces
-        faces={faces.filter((face) => !embeddedFaces.has(face.key))}
+        faces={faces.filter((face) => !face.embedded)}
         host={host}
         sampleRate={sampleRate}
         onClose={closeFace}

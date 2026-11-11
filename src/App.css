@@ -5416,6 +5416,228 @@ button {
   display: none;
 }
 
+.signal-chain .card-vst {
+  display: flex;
+  flex-direction: column;
+}
+
+.signal-chain .card-vst-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+}
+
+.signal-chain .vst-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 9px 3px 7px;
+  border: 1px solid #3a4a43;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.22);
+  color: #93a39a;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.15px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.signal-chain .vst-live-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.signal-chain .vst-live em {
+  font-style: normal;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 9.5px;
+  opacity: 0.85;
+}
+
+.signal-chain .vst-live.on {
+  border-color: #3f7d5f;
+  background: linear-gradient(180deg, rgba(84, 176, 128, 0.22), rgba(22, 58, 42, 0.38));
+  color: #a6ecc6;
+  box-shadow: 0 0 10px rgba(80, 200, 140, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.signal-chain .vst-live.off {
+  border-color: #7a4444;
+  background: linear-gradient(180deg, rgba(170, 78, 78, 0.2), rgba(60, 24, 24, 0.36));
+  color: #e8a7a7;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+
+.signal-chain .vst-live.idle {
+  border-style: dashed;
+  background: rgba(255, 255, 255, 0.03);
+  color: #8b9a91;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.signal-chain .vst-live.idle .vst-live-dot {
+  background: transparent;
+  border: 1px solid currentColor;
+  box-shadow: none;
+}
+
+.signal-chain .card-kind.kind-vst3 {
+  padding: 2px 6px;
+  border: 1px solid #3f78a8;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #24445f, #1a3047);
+  color: #a9d4ff;
+  font-size: 9px;
+  letter-spacing: 0.6px;
+  box-shadow: 0 0 8px rgba(70, 140, 210, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+}
+
+.signal-chain .card-kind.kind-vst2 {
+  padding: 2px 6px;
+  border: 1px solid #3f6b5c;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #2a4038, #1d2c27);
+  color: #9ed6c1;
+  font-size: 9px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.signal-chain .vst-face-note {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 48px;
+  margin-top: 0;
+  padding: 8px;
+  border: 1px dashed #3a4a43;
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.14));
+  color: #8fa79a;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.35;
+  text-align: center;
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.signal-chain .vst-face-note::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 9px 9px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.signal-chain .vst-face-note::after {
+  content: attr(data-kind);
+  position: absolute;
+  right: 7px;
+  bottom: 0;
+  color: rgba(255, 255, 255, 0.055);
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.signal-chain .vst-face-note > * {
+  position: relative;
+  z-index: 1;
+}
+
+.signal-chain .vst-face-note:hover {
+  border-color: #5a7466;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.16));
+  color: #b9d2c4;
+}
+
+.signal-chain .vst-face-note:focus-visible {
+  outline: 2px solid #8ab4f8;
+  outline-offset: 2px;
+}
+
+.signal-chain .vst-face-note-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.signal-chain .vst-face-note-copy strong {
+  color: #d3e4da;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.signal-chain .vst-face-note-copy small {
+  color: #8fa79a;
+  font-size: 9.5px;
+  font-weight: 400;
+  line-height: 1.3;
+}
+
+.signal-chain .vst-face-note.on .vst-face-note-copy strong {
+  color: #d6f7e4;
+}
+
+.signal-chain .vst-face-note.on .vst-face-note-copy small {
+  color: #9fd3b8;
+}
+
+.signal-chain .vst-face-note b {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid #4a7aa8;
+  border-radius: 4px;
+  background: #2b3a49;
+  color: #cfe3f5;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+}
+
+.signal-chain .vst-face-note.on {
+  border-style: solid;
+  border-color: #3f6b57;
+  color: #9fd3b8;
+}
+
+.signal-chain .vst-face-note.on::after {
+  color: rgba(120, 230, 170, 0.09);
+}
+
+.signal-chain .vst-face-note.on:hover {
+  border-color: #4f8a6d;
+  color: #c7f3da;
+}
+
 .signal-chain .card-move {
   flex: 0 0 auto;
   gap: 2px;

@@ -39,6 +39,8 @@ export interface NativeFace {
   height: number
   /** Values the plugin moved itself, read back while its window is up. */
   values: { id: number; value: number }[]
+  /** Whether this face is shown embedded in the chain row (small) vs floating in FX window (large). */
+  embedded?: boolean
 }
 
 /**
@@ -56,10 +58,14 @@ export function useNativeFaces(): {
   faces: NativeFace[]
   /** Ask for a row's interface. The plugin's own answer decides what happens. */
   open: (slot: NativeVstSlot) => void
+  /** Ask for a row's interface already embedded in its card (small). */
+  openEmbedded: (slot: NativeVstSlot) => void
   /** Put one away, plugin included: a face the producer closed is closed. */
   close: (key: string) => void
   /** One press to open, the next to put away — the row's knob button. */
   toggle: (slot: NativeVstSlot) => void
+  /** Toggle a face between small in its card and large in the side pane. */
+  toggleEmbedded: (slot: NativeVstSlot) => void
   isOpen: (key: string) => boolean
   /** A row's face, when it has one up. */
   face: (key: string) => NativeFace | null
@@ -104,18 +110,15 @@ export function useNativeFaces(): {
     setFaces((prev) => {
       const existing = prev.find((face) => face.key === key)
       if (existing) {
-        // The same row pressing "open" again is a producer asking for the window
-        // back after it was lost — so the row is re-armed, with the file it holds
-        // now, not duplicated.
         return prev.map((face) =>
           face.key === key
-            ? { ...face, path: slot.path, name: slot.name, phase: 'pending', width: 0, height: 0, values: [] }
+            ? { ...face, path: slot.path, name: slot.name, phase: 'pending', width: 0, height: 0, values: [], embedded: false }
             : face,
         )
       }
       return [
         ...prev,
-        { key, path: slot.path, name: slot.name, phase: 'pending', width: 0, height: 0, values: [] },
+        { key, path: slot.path, name: slot.name, phase: 'pending', width: 0, height: 0, values: [], embedded: false },
       ]
     })
   }, [])
@@ -129,6 +132,45 @@ export function useNativeFaces(): {
     setFaces([])
     setErrors({})
   }, [])
+
+  const setEmbedded = useCallback((key: string, embedded: boolean) => {
+    // Moving a face between the card and the side pane remounts its stage, and
+    // the stage that goes away takes the plugin window with it. The new stage
+    // must therefore be told to open the editor again: the phase goes back to
+    // pending, which is what re-arms `gui-open` on the fresh mount.
+    setFaces((prev) =>
+      prev.map((face) =>
+        face.key === key ? { ...face, embedded, phase: 'pending', width: 0, height: 0 } : face,
+      ),
+    )
+  }, [])
+
+  const openEmbedded = useCallback(
+    (slot: NativeVstSlot) => {
+      open(slot)
+      setEmbedded(faceKeyOf(slot), true)
+    },
+    [open, setEmbedded],
+  )
+
+  const toggleEmbedded = useCallback(
+    (slot: NativeVstSlot) => {
+      const key = faceKeyOf(slot)
+      const existing = faces.find((face) => face.key === key)
+      if (!existing) {
+        // none -> embedded (small in the card)
+        open(slot)
+        setEmbedded(key, true)
+      } else if (existing.embedded) {
+        // embedded -> floating (large in the side pane)
+        setEmbedded(key, false)
+      } else {
+        // floating -> embedded
+        setEmbedded(key, true)
+      }
+    },
+    [faces, open, setEmbedded],
+  )
 
   const toggle = useCallback(
     (slot: NativeVstSlot) => {
@@ -145,7 +187,20 @@ export function useNativeFaces(): {
 
   const errorOf = useCallback((key: string) => errors[key] ?? '', [errors])
 
-  return { faces, open, close, closeAll, toggle, isOpen, face, errorOf, report: patch, refuse }
+  return {
+    faces,
+    open,
+    openEmbedded,
+    close,
+    closeAll,
+    toggle,
+    toggleEmbedded,
+    isOpen,
+    face,
+    errorOf,
+    report: patch,
+    refuse,
+  }
 }
 
 interface StackProps {
@@ -228,12 +283,18 @@ export function NativeVstFaceStage({ face, sampleRate, onClose, report, refuse, 
   const visibleRect = (): { x: number; y: number; width: number; height: number } | null => {
     const box = canvasRef.current?.getBoundingClientRect()
     if (!box || box.width < 8 || box.height < 8) return null
-    const clipSelector = embedded ? '.native-vst-row' : '.native-vst-faces'
+    const clipSelector = embedded ? '.native-vst-embedded' : '.native-vst-faces'
     const clip = canvasRef.current?.closest(clipSelector)?.getBoundingClientRect()
-    const left = Math.max(box.left, clip?.left ?? box.left)
-    const top = Math.max(box.top, clip?.top ?? box.top)
-    const right = Math.min(box.right, clip?.right ?? box.right)
-    const bottom = Math.min(box.bottom, clip?.bottom ?? box.bottom)
+    // An embedded face lives in the chain's scroll area: when the chain is
+    // scrolled the card can leave the viewport, and a window placed by the card's
+    // own rectangle would keep painting over whatever is beside the scroll box.
+    const scroll = embedded
+      ? canvasRef.current?.closest('.fx-body-scroll')?.getBoundingClientRect()
+      : null
+    const left = Math.max(box.left, clip?.left ?? box.left, scroll?.left ?? box.left)
+    const top = Math.max(box.top, clip?.top ?? box.top, scroll?.top ?? box.top)
+    const right = Math.min(box.right, clip?.right ?? box.right, scroll?.right ?? box.right)
+    const bottom = Math.min(box.bottom, clip?.bottom ?? box.bottom, scroll?.bottom ?? box.bottom)
     const width = Math.round(right - left)
     const height = Math.round(bottom - top)
     // A sliver of a plugin is not an interface: below this the window is put away
