@@ -14,6 +14,7 @@ const path = require('node:path')
 const { serve } = require('./server.cjs')
 const plugins = require('./plugins.cjs')
 const asioHost = require('./asio-host.cjs')
+const updater = require('./updater.cjs')
 const wav = require('./wav.cjs')
 
 const DIST = path.join(__dirname, '..', 'dist')
@@ -235,6 +236,62 @@ ipcMain.handle('opdaw:info', () => ({
   dist: DIST,
   servedFrom: server?.url ?? null,
 }))
+
+// --------------------------------------------------------------- atualizações
+/**
+ * O app instalado se atualiza pela última release do GitHub: consulta, baixa o
+ * Setup e o entrega ao Windows. A pasta portátil não instala nada — nesse modo a
+ * interface só abre a página da release.
+ */
+const UPDATE_MODE = process.env.PORTABLE_EXECUTABLE_DIR ? 'portable' : 'installed'
+const UPDATE_CACHE = path.join(app.getPath('userData'), 'update-check.json')
+const UPDATE_DIR = path.join(app.getPath('temp'), 'OpenDAW-updates')
+
+ipcMain.handle('opdaw:update:check', (_event, options) =>
+  updater.check({
+    current: app.getVersion(),
+    cacheFile: UPDATE_CACHE,
+    force: Boolean(options?.force),
+    mode: UPDATE_MODE,
+  }),
+)
+
+ipcMain.handle('opdaw:update:download', async (event, payload) => {
+  const sender = event.sender
+  try {
+    const file = await updater.download(payload?.asset, UPDATE_DIR, (progress) => {
+      if (!sender.isDestroyed()) sender.send('opdaw:update:progress', progress)
+    })
+    return { ok: true, path: file, name: path.basename(file) }
+  } catch (error) {
+    return { ok: false, error: error.message }
+  }
+})
+
+ipcMain.handle('opdaw:update:install', (_event, payload) => {
+  if (UPDATE_MODE === 'portable') {
+    return { ok: false, error: 'a versão portátil não se instala sozinha' }
+  }
+  try {
+    const installer = updater.validateInstaller(payload?.path)
+    // O .exe só pode ser trocado com o app fechado: o instalador silencioso só
+    // começa depois do quit, e reabre o OpenDAW quando termina.
+    app.once('will-quit', () => updater.launchInstaller(installer, app.getPath('exe')))
+    setTimeout(() => app.quit(), 200)
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error.message }
+  }
+})
+
+ipcMain.handle('opdaw:update:open-release', async (_event, url) => {
+  const target =
+    typeof url === 'string' && /^https:\/\/github\.com\/Frankwillians\/opendaw\//i.test(url)
+      ? url
+      : updater.RELEASES_URL
+  await shell.openExternal(target)
+  return { ok: true }
+})
 
 ipcMain.handle('opdaw:audio-system:get', () => readAudioSettings())
 
@@ -3668,6 +3725,21 @@ if (!single) {
     // (utilityProcess fork after BrowserWindow causes PortAudio/koffi crash)
     await asioHost.init()
     await createWindow()
+    // Aviso discreto de versão nova. Falha de rede aqui é silêncio, não erro:
+    // quem quiser conferir na mão usa Ajuda ▸ Verificar atualizações.
+    setTimeout(() => {
+      updater
+        .check({ current: app.getVersion(), cacheFile: UPDATE_CACHE, mode: UPDATE_MODE })
+        .then((result) => {
+          if (!result?.ok || !result.newer) return
+          try {
+            win?.webContents.send('opdaw:update:available', result)
+          } catch {
+            // Janela já fechada: o aviso simplesmente não tem para quem ir.
+          }
+        })
+        .catch(() => {})
+    }, 6000)
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) void createWindow()
     })

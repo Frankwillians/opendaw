@@ -29,6 +29,8 @@ import { clearSamples, deleteSample, listSamples, loadSample, saveSample } from 
 import { activeNativeSlots, nativePreviewKey } from './audio/native-preview'
 import { NativeLiveLink, canRunLive, liveLatencyMs } from './audio/native-live'
 import { SalaCableWindow } from './audio/SalaCableWindow'
+import { UpdateDialog } from './UpdateDialog'
+import { appVersion, onUpdateAvailable } from './update'
 import {
   buildChainFile,
   buildProjectFile,
@@ -2291,6 +2293,9 @@ export default function App() {
   const punchGateRef = useRef<() => void>(() => {})
   const [activeTab, setActiveTab] = useState<Tab>('arrangement')
   const [showMixer, setShowMixer] = useState(true)
+  /** A janela de atualização; e a versão nova que o executável avisou sozinho. */
+  const [showUpdate, setShowUpdate] = useState(false)
+  const [updateNotice, setUpdateNotice] = useState<string | null>(null)
   const [levels, setLevels] = useState<Record<string, number>>({})
   /**
    * The master bus as the standard measures it, straight off the audio thread:
@@ -9814,6 +9819,16 @@ export default function App() {
     return mirrorMenuBar(bar)
   }, [])
 
+  // O executável confere a versão sozinho alguns segundos depois de abrir. Aqui
+  // só se guarda o aviso: a barra oferece a atualização sem interromper ninguém.
+  useEffect(
+    () =>
+      onUpdateAvailable((info) => {
+        if (info?.newer && info.latest) setUpdateNotice(info.latest)
+      }),
+    [],
+  )
+
   const applyChainOrder = (trackId: string, orderKey: string) => {
     const preset = CHAIN_ORDERS[orderKey]
     const track = tracksRef.current.find((item) => item.id === trackId)
@@ -10304,6 +10319,8 @@ export default function App() {
   const snapRef = useRef(true)
   snapRef.current = snapEnabled
   const timelineScrollRef = useRef<HTMLDivElement | null>(null)
+  const tcpRowsRef = useRef<HTMLDivElement | null>(null)
+  const tcpHeadRef = useRef<HTMLDivElement | null>(null)
 
   /** Grid snapping for timeline edits; `free` (Alt held) overrides it. */
   const snapStep = (value: number, free = false): number =>
@@ -10343,6 +10360,90 @@ export default function App() {
     // be re-attached: the listener stays valid for the life of the scroll node.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  /**
+   * Os cabeçalhos de track e as lanes são duas listas separadas. Sozinhas, a
+   * mais alta vai ficando para trás e a grade deixa de bater linha a linha.
+   * Aqui a altura natural de cada cabeçalho vira a altura da lane (mais a
+   * faixa de automação quando ela está aberta) e os dois rolamentos andam
+   * juntos, para o cabeçalho nunca sair de cima da sua lane.
+   */
+  useEffect(() => {
+    const rows = tcpRowsRef.current
+    const timeline = timelineScrollRef.current
+    if (!rows || !timeline) return
+    const naturalHeights = new Map<string, number>()
+
+    const syncHeights = () => {
+      // The head has to be exactly as tall as the ruler next to it; the ruler's
+      // height comes from its own content, so it is measured, not guessed.
+      const ruler = timeline.querySelector<HTMLElement>('.ruler-bar')
+      if (ruler) tcpHeadRef.current?.style.setProperty('height', `${ruler.offsetHeight}px`)
+
+      const headers = Array.from(rows.querySelectorAll<HTMLElement>('[data-track-id]'))
+      for (const header of headers) {
+        const id = header.dataset.trackId
+        if (!id) continue
+        let natural = naturalHeights.get(id)
+        if (natural === undefined) {
+          header.style.minHeight = ''
+          natural = header.offsetHeight
+          naturalHeights.set(id, natural)
+        }
+        const lane = timeline.querySelector<HTMLElement>(
+          `.arrangement-lane[data-track-id="${id}"]`,
+        )
+        if (!lane) {
+          const band = timeline.querySelector<HTMLElement>(
+            `.arrangement-folder[data-track-id="${id}"]`,
+          )
+          if (band) band.style.height = `${natural}px`
+          continue
+        }
+        // Lane and header are the same row: the envelope strip lives inside the
+        // lane and the clip gives up that space, so nothing drifts downwards.
+        lane.style.height = `${natural}px`
+        header.style.minHeight = ''
+      }
+    }
+
+    let frame = 0
+    const schedule = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        syncHeights()
+      })
+    }
+
+    schedule()
+    const observer = new ResizeObserver(schedule)
+    observer.observe(rows)
+    for (const header of rows.querySelectorAll('[data-track-id]')) observer.observe(header)
+
+    // Um lado manda no outro; quando os valores já batem, nada é escrito, então
+    // o evento de scroll não vira um pingue-pongue.
+    const link = (from: HTMLElement, to: HTMLElement) => () => {
+      if (Math.abs(to.scrollTop - from.scrollTop) > 1) to.scrollTop = from.scrollTop
+    }
+    const onTimelineScroll = link(timeline, rows)
+    const onRowsScroll = link(rows, timeline)
+    timeline.addEventListener('scroll', onTimelineScroll, { passive: true })
+    rows.addEventListener('scroll', onRowsScroll, { passive: true })
+    const onWindowResize = () => {
+      naturalHeights.clear()
+      schedule()
+    }
+    window.addEventListener('resize', onWindowResize)
+
+    return () => {
+      observer.disconnect()
+      if (frame) cancelAnimationFrame(frame)
+      timeline.removeEventListener('scroll', onTimelineScroll)
+      rows.removeEventListener('scroll', onRowsScroll)
+      window.removeEventListener('resize', onWindowResize)
+    }
+  }, [tracks, lanesOpen])
 
   const fxTrack = fxTrackId ? tracks.find((track) => track.id === fxTrackId) ?? null : null
   const fxChainEntries = fxTrack ? chainEntriesFor(fxTrack) : []
@@ -10934,8 +11035,18 @@ export default function App() {
     <div className="reaper-shell">
       <header className={`menu-bar ${isNativeApp() ? 'native' : ''}`}>
         <div className="logo">
-          OpenDAW <span>STUDIO v1.0</span>
+          OpenDAW <span>STUDIO v{appVersion}</span>
         </div>
+        {updateNotice ? (
+          <button
+            type="button"
+            className="update-chip"
+            onClick={() => setShowUpdate(true)}
+            title={`A versão ${updateNotice} já está publicada no GitHub`}
+          >
+            ⬆ Atualizar para v{updateNotice}
+          </button>
+        ) : null}
         <nav className="menu-items" ref={menuBarRef}>
           <div className="menu-item">
             <span>Arquivo</span>
@@ -11101,6 +11212,20 @@ export default function App() {
               </button>
               <button type="button" onClick={() => void enableMidi()}>
                 🎹 Controladores MIDI…
+              </button>
+            </div>
+          </div>
+          <div className="menu-item">
+            <span>Ajuda</span>
+            <div className="dropdown">
+              {/* Consulta a última release do GitHub. No executável instalado o
+                  próprio app baixa o Setup e se atualiza; na web e na pasta
+                  portátil o caminho é a página da release. */}
+              <button type="button" onClick={() => setShowUpdate(true)}>
+                ⟳ Verificar atualizações…
+              </button>
+              <button type="button" disabled title="Versão em execução">
+                Versão {appVersion}
               </button>
             </div>
           </div>
@@ -11314,8 +11439,65 @@ export default function App() {
         </div>
       </section>
 
+      {/* Toolbar above both columns: the track headers and the ruler now start
+          at the same y, which is what keeps the grid readable. */}
+      <div className="workspace-tabs">
+        <button
+          type="button"
+          className={`tab-btn ${activeTab === 'arrangement' ? 'active' : ''}`}
+          onClick={() => setActiveTab('arrangement')}
+        >
+          Arrangement
+        </button>
+        <div className="view-tools" role="group" aria-label="Zoom e snap">
+          <button
+            type="button"
+            className={`tab-btn ${snapEnabled ? 'active' : ''}`}
+            onClick={toggleSnap}
+            aria-pressed={snapEnabled}
+            title="Snap ao 16º (tecla B) · Alt durante um arraste ignora o snap"
+          >
+            Snap {snapEnabled ? 'on' : 'off'}
+          </button>
+          <button
+            type="button"
+            className="tab-btn"
+            onClick={() => zoomStep(-1)}
+            title="Afastar (menos zoom) · Ctrl+roda para trás"
+          >
+            −
+          </button>
+          <span className="zoom-readout">
+            {visibleBars} / {arrangementBars} comp.
+          </span>
+          <button
+            type="button"
+            className="tab-btn"
+            onClick={() => zoomStep(1)}
+            title="Aproximar (mais zoom) · Ctrl+roda"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${zoomBars === 0 ? 'active' : ''}`}
+            onClick={() => setZoomBars(0)}
+            title="Encaixar todos os compassos na janela"
+          >
+            Fit
+          </button>
+        </div>
+      </div>
+
       <main className="daw-workspace">
         <aside className="tcp-panel">
+          <div className="tcp-head" ref={tcpHeadRef}>
+            <span className="tcp-head-title">FAIXAS</span>
+            <span className="tcp-head-count">
+              {tracks.filter((track) => !track.isFolder).length} track(s)
+            </span>
+          </div>
+          <div className="tcp-rows" ref={tcpRowsRef}>
           {laneRows.map((row) => {
             const track = row.track
             if (track.isFolder) {
@@ -11323,6 +11505,7 @@ export default function App() {
               return (
                 <div
                   key={track.id}
+                  data-track-id={track.id}
                   className={`tcp-folder ${selectedTrackId === track.id ? 'selected' : ''} ${
                     dragOverTrackId === track.id ? 'drag-over' : ''
                   }`}
@@ -11404,6 +11587,7 @@ export default function App() {
             return (
             <div
               key={track.id}
+              data-track-id={track.id}
               className={`tcp-track ${row.indent ? 'in-folder' : ''} ${
                 track.isArmed ? 'armed' : ''
               } ${selectedTrackId === track.id ? 'selected' : ''} ${
@@ -11468,29 +11652,35 @@ export default function App() {
                     type="button"
                     className={`tcp-btn btn-arm ${track.isArmed ? 'armed' : ''}`}
                     title="Armar gravação"
+                    aria-label={`Armar gravação de ${track.name}`}
+                    aria-pressed={track.isArmed}
                     onClick={() => toggleArm(track.id)}
                   >
-                    ar
+                    R
                   </button>
                   <button
                     type="button"
                     className={`tcp-btn btn-mute ${track.isMuted ? 'muted' : ''}`}
                     title="Mute (M)"
+                    aria-label={`Mute de ${track.name}`}
+                    aria-pressed={track.isMuted}
                     onClick={() => toggleMute(track.id)}
                   >
-                    m
+                    M
                   </button>
                   <button
                     type="button"
                     className={`tcp-btn btn-solo ${track.isSoloed ? 'soloed' : ''}`}
                     title="Solo (S)"
+                    aria-label={`Solo de ${track.name}`}
+                    aria-pressed={track.isSoloed}
                     onClick={() => toggleSolo(track.id)}
                   >
-                    s
+                    S
                   </button>
                   <button
                     type="button"
-                    className="tcp-btn btn-fx"
+                    className={`tcp-btn btn-fx ${track.plugins.length > 0 ? 'has-fx' : ''}`}
                     title="Cadeia de plugins"
                     onClick={() => setFxTrackId(track.id)}
                   >
@@ -11777,59 +11967,13 @@ export default function App() {
           );
         })}
 
-          <button type="button" className="tcp-add" onClick={addTrack}>
-            + Track
-          </button>
+            <button type="button" className="tcp-add" onClick={addTrack}>
+              + Track
+            </button>
+          </div>
         </aside>
 
         <section className="timeline-panel">
-          <div className="workspace-tabs">
-            <button
-              type="button"
-              className={`tab-btn ${activeTab === 'arrangement' ? 'active' : ''}`}
-              onClick={() => setActiveTab('arrangement')}
-            >
-              Arrangement
-            </button>
-            <div className="view-tools" role="group" aria-label="Zoom e snap">
-              <button
-                type="button"
-                className={`tab-btn ${snapEnabled ? 'active' : ''}`}
-                onClick={toggleSnap}
-                aria-pressed={snapEnabled}
-                title="Snap ao 16º (tecla B) · Alt durante um arraste ignora o snap"
-              >
-                Snap {snapEnabled ? 'on' : 'off'}
-              </button>
-              <button
-                type="button"
-                className="tab-btn"
-                onClick={() => zoomStep(-1)}
-                title="Afastar (menos zoom) · Ctrl+roda para trás"
-              >
-                −
-              </button>
-              <span className="zoom-readout">
-                {visibleBars} / {arrangementBars} comp.
-              </span>
-              <button
-                type="button"
-                className="tab-btn"
-                onClick={() => zoomStep(1)}
-                title="Aproximar (mais zoom) · Ctrl+roda"
-              >
-                +
-              </button>
-              <button
-                type="button"
-                className={`tab-btn ${zoomBars === 0 ? 'active' : ''}`}
-                onClick={() => setZoomBars(0)}
-                title="Encaixar todos os compassos na janela"
-              >
-                Fit
-              </button>
-            </div>
-          </div>
 
           <div className="timeline-scroll" ref={timelineScrollRef}>
             <div className="timeline-content" style={{ width: `${contentWidthPct}%` }}>
@@ -12509,33 +12653,36 @@ export default function App() {
                     type="button"
                     className={`tcp-btn btn-mute ${track.isMuted ? 'muted' : ''}`}
                     title="Mute"
+                    aria-pressed={track.isMuted}
                     onClick={() => toggleMute(track.id)}
                   >
-                    m
+                    M
                   </button>
                   <button
                     type="button"
                     className={`tcp-btn btn-solo ${track.isSoloed ? 'soloed' : ''}`}
                     title="Solo"
+                    aria-pressed={track.isSoloed}
                     onClick={() => toggleSolo(track.id)}
                   >
-                    s
+                    S
                   </button>
                   <button
                     type="button"
                     className={`tcp-btn btn-mon ${track.inputMonitor ? 'on' : ''}`}
                     title={track.inputDeviceId ? 'Monitorar entrada (fone)' : 'Sem entrada selecionada'}
+                    aria-pressed={track.inputMonitor}
                     onClick={() => toggleInputMonitor(track.id)}
                   >
                     🎧
                   </button>
                   <button
                     type="button"
-                    className="tcp-btn btn-fx"
+                    className={`tcp-btn btn-fx ${track.plugins.length > 0 ? 'has-fx' : ''}`}
                     title="Plugins"
                     onClick={() => setFxTrackId(track.id)}
                   >
-                    FX
+                    FX{track.plugins.length > 0 ? ` ${track.plugins.length}` : ''}
                   </button>
                 </div>
                 <input
@@ -13392,6 +13539,8 @@ export default function App() {
           </div>
         </div>
       ) : null}
+
+      {showUpdate ? <UpdateDialog onClose={() => setShowUpdate(false)} /> : null}
 
       {showVersions ? (
         <div className="modal-overlay" onClick={() => setShowVersions(false)}>

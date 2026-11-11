@@ -41,6 +41,7 @@ const DESKTOP_FILES = [
   'portaudio.cjs',
   'asio-worker.cjs',
   'asio-host.cjs',
+  'updater.cjs',
   'selftest-native.cjs',
 ]
 const NATIVE_DEPS = ['koffi', '@koromix/koffi-win32-x64']

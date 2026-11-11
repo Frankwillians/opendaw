@@ -171,6 +171,26 @@ contextBridge.exposeInMainWorld('OpenDAW', {
     liveClose: (request) => ipcRenderer.invoke('opdaw:plugin:live-close', request),
   },
 
+  // Atualização pela última release do GitHub: a checagem, o download do Setup e
+  // a entrega dele ao Windows. No navegador este objeto não existe e a página
+  // consulta a mesma API direto.
+  updates: {
+    check: (options) => ipcRenderer.invoke('opdaw:update:check', options ?? {}),
+    download: (asset) => ipcRenderer.invoke('opdaw:update:download', { asset }),
+    install: (filePath) => ipcRenderer.invoke('opdaw:update:install', { path: filePath }),
+    openRelease: (url) => ipcRenderer.invoke('opdaw:update:open-release', url),
+    onProgress: (handler) => {
+      const listener = (_event, progress) => handler(progress)
+      ipcRenderer.on('opdaw:update:progress', listener)
+      return () => ipcRenderer.removeListener('opdaw:update:progress', listener)
+    },
+    onAvailable: (handler) => {
+      const listener = (_event, info) => handler(info)
+      ipcRenderer.on('opdaw:update:available', listener)
+      return () => ipcRenderer.removeListener('opdaw:update:available', listener)
+    },
+  },
+
   onMenu: (handler) => {
     menuListeners.add(handler)
     return () => menuListeners.delete(handler)

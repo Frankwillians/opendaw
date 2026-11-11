@@ -36,6 +36,7 @@ const DESKTOP_FILES = [
   'portaudio.cjs',
   'asio-worker.cjs',
   'asio-host.cjs',
+  'updater.cjs',
   'selftest-native.cjs',
 ]
 

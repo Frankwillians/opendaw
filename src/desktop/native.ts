@@ -297,6 +297,44 @@ export interface NativeAsioStatus {
   portInAttached: boolean
 }
 
+/** O instalador publicado na release, como o GitHub o descreve. */
+export interface NativeUpdateAsset {
+  name: string
+  size: number
+  url: string
+}
+
+/** Resposta da consulta de atualização. `mode` diz o que dá para fazer. */
+export interface NativeUpdateCheck {
+  ok: boolean
+  /** 'installed' (pode baixar e instalar), 'portable' (só avisar) ou 'web'. */
+  mode?: string
+  current: string
+  latest?: string
+  newer?: boolean
+  releaseUrl?: string
+  notes?: string
+  publishedAt?: string
+  asset?: NativeUpdateAsset | null
+  cached?: boolean
+  stale?: boolean
+  warning?: string
+  error?: string
+}
+
+export interface NativeUpdateProgress {
+  received: number
+  total: number
+  percent: number
+}
+
+export interface NativeUpdateDownload {
+  ok: boolean
+  path?: string
+  name?: string
+  error?: string
+}
+
 interface OpenDAWApi {
   native: true
   platform: string
@@ -415,6 +453,19 @@ interface OpenDAWApi {
   onMenu: (handler: (click: NativeMenuClick) => void) => () => void
   /** Hand the page's own menu structure over, so the OS bar can mirror it. */
   setMenu?: (groups: NativeMenuGroup[]) => void
+  /**
+   * Atualização pela última release do GitHub. Opcional porque o navegador não
+   * tem processo para baixar e rodar um instalador — lá a página consulta a
+   * mesma API direto e só oferece o link da release.
+   */
+  updates?: {
+    check: (options?: { force?: boolean }) => Promise<NativeUpdateCheck>
+    download: (asset: NativeUpdateAsset) => Promise<NativeUpdateDownload>
+    install: (filePath: string) => Promise<{ ok: boolean; error?: string }>
+    openRelease: (url: string) => Promise<{ ok: boolean }>
+    onProgress: (handler: (progress: NativeUpdateProgress) => void) => () => void
+    onAvailable: (handler: (info: NativeUpdateCheck) => void) => () => void
+  }
 }
 
 declare global {
