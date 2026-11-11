@@ -2663,7 +2663,7 @@ export default function App() {
     midiNotes: [],
     // A fresh drum track starts as a one-bar step pattern: that is the whole
     // point of the sequencer, and it can still be switched back to free notes.
-    patternSteps: kind === 'instrument' && instrument === 'drums' ? 16 : 0,
+    patternSteps: kind === 'instrument' ? 16 : 0,
     voice: defaultVoice(instrument),
   })
 
