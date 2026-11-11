@@ -133,7 +133,24 @@ function sendMenuClick(menu, item) {
  */
 let menuStructure = null
 
-/** Rows the mirrored menu cannot carry, appended to the group whose name matches. */
+/**
+ * Rows the mirrored menu cannot carry, appended to the group whose name matches.
+ * "Ajuda" is one of them: the page already publishes the group, so the native
+ * side only contributes what a browser cannot show — the About box.
+ */
+const showAbout = () => {
+  dialog.showMessageBox({
+    type: 'info',
+    title: 'OpenDAW',
+    message: `OpenDAW ${app.getVersion()}`,
+    detail: [
+      'Versão para Windows, com motor de plugins nativo por FFI.',
+      `Electron ${process.versions.electron} · Chromium ${process.versions.chrome} · Node ${process.versions.node}`,
+      `Arquivos do app: ${documentsDir()}`,
+    ].join('\n'),
+  })
+}
+
 const EXTRAS = [
   {
     match: /^(arquivo|file)$/i,
@@ -155,6 +172,13 @@ const EXTRAS = [
       { role: 'resetZoom', label: 'Zoom 100%' },
       { role: 'zoomIn', label: 'Aumentar zoom' },
       { role: 'zoomOut', label: 'Diminuir zoom' },
+    ],
+  },
+  {
+    match: /^(ajuda|help)$/i,
+    rows: () => [
+      { type: 'separator' },
+      { label: 'Sobre o OpenDAW', click: () => void showAbout() },
     ],
   },
 ]
@@ -193,26 +217,16 @@ function buildMenu() {
       { label: 'Painel de plugins nativos', accelerator: 'CmdOrCtrl+Shift+M', click: () => sendMenu('plugin-panel') },
     ],
   })
-  template.push({
-    label: 'Ajuda',
-    submenu: [
-      {
-        label: 'Sobre o OpenDAW',
-        click: () => {
-          dialog.showMessageBox({
-            type: 'info',
-            title: 'OpenDAW',
-            message: `OpenDAW ${app.getVersion()}`,
-            detail: [
-              'Versão para Windows, com motor de plugins nativo por FFI.',
-              `Electron ${process.versions.electron} · Chromium ${process.versions.chrome} · Node ${process.versions.node}`,
-              `Arquivos do app: ${documentsDir()}`,
-            ].join('\n'),
-          })
-        },
-      },
-    ],
-  })
+  // A página já publica o grupo Ajuda; o executável só cria um quando ela não
+  // publica, senão a barra do Windows mostra dois menus com o mesmo nome. O
+  // "Sobre" entra pelo EXTRAS nesse caso, para não duplicar a linha.
+  const hasHelp = groups.some((group) => /^(ajuda|help)$/i.test(String(group.label).trim()))
+  if (!hasHelp) {
+    template.push({
+      label: 'Ajuda',
+      submenu: [{ label: 'Sobre o OpenDAW', click: () => void showAbout() }],
+    })
+  }
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }

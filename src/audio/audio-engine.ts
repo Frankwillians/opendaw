@@ -365,8 +365,6 @@ type ChainStage =
 interface EngineTrack {
   panner: StereoPannerNode
   fxInput: GainNode
-  shaper: WaveShaperNode
-  filter: BiquadFilterNode
   fx: BuiltinChain
   chain: ChainStage[]
   namSplit: GainNode
@@ -2524,8 +2522,6 @@ export class AudioEngine {
     if (this.tracks.has(id)) this.removeTrack(id)
     const panner = this.ctx.createStereoPanner()
     const fxInput = this.ctx.createGain()
-    const shaper = this.ctx.createWaveShaper()
-    const filter = this.ctx.createBiquadFilter()
     const fx = createBuiltinChain(this.ctx, defaultBuiltinFx())
     const namSplit = this.ctx.createGain()
     const namSum = this.ctx.createGain()
@@ -2549,8 +2545,6 @@ export class AudioEngine {
     analyser.fftSize = 256
     gain.gain.value = volume
     panner.pan.value = pan
-    filter.type = 'allpass'
-    filter.frequency.value = 20000
     monoGains[0].gain.value = 1
     monoGains[1].gain.value = 0
     monoGains[2].gain.value = 0
@@ -2562,8 +2556,6 @@ export class AudioEngine {
     const track: EngineTrack = {
       panner,
       fxInput,
-      shaper,
-      filter,
       fx,
       chain: BUILTIN_FX_IDS.map((fxId) => ({ kind: 'builtin', id: fxId })),
       namSplit,
@@ -2654,8 +2646,6 @@ export class AudioEngine {
     track.plugins.forEach((plugin) => plugin.dispose())
     track.panner.disconnect()
     track.fxInput.disconnect()
-    track.shaper.disconnect()
-    track.filter.disconnect()
     track.namSplit.disconnect()
     track.namSum.disconnect()
     // Every node a unit created is in its `extra` list, including the internal
@@ -2706,16 +2696,12 @@ export class AudioEngine {
 
     track.panner.disconnect()
     track.fxInput.disconnect()
-    track.shaper.disconnect()
-    track.filter.disconnect()
     track.namSplit.disconnect()
     track.namSum.disconnect()
     for (const plugin of track.plugins) plugin.output.disconnect()
     for (const unit of Object.values(track.fx.units)) unit.output.disconnect()
 
     track.panner.connect(track.fxInput)
-    track.fxInput.connect(track.shaper)
-    track.shaper.connect(track.filter)
 
     const plugins = new Map(track.plugins.map((plugin) => [plugin.id, plugin]))
 
@@ -2753,7 +2739,7 @@ export class AudioEngine {
       }
     }
 
-    let cursor: AudioNode = track.filter
+    let cursor: AudioNode = track.fxInput
     let parallelConnected = false
 
     for (const stage of track.chain) {
@@ -3418,35 +3404,6 @@ export class AudioEngine {
     track.plugins.splice(index, 1)
     track.chain = track.chain.filter((stage) => !(stage.kind === 'plugin' && stage.id === pluginId))
     this.rewire(trackId)
-  }
-
-  // ------------------------------------------------------- built-in amp sim
-
-  setFxEnabled(id: string, enabled: boolean): void {
-    const track = this.tracks.get(id)
-    if (!track) return
-    if (enabled) {
-      track.shaper.curve = makeDriveCurve(35)
-      track.filter.type = 'lowpass'
-      track.filter.frequency.setTargetAtTime(4500, this.ctx.currentTime, 0.02)
-    } else {
-      track.shaper.curve = null
-      track.filter.type = 'allpass'
-      track.filter.frequency.setTargetAtTime(20000, this.ctx.currentTime, 0.02)
-    }
-  }
-
-  setDrive(id: string, amount: number): void {
-    const track = this.tracks.get(id)
-    if (!track) return
-    track.shaper.curve = makeDriveCurve(amount)
-  }
-
-  setCabinet(id: string, frequency: number): void {
-    const track = this.tracks.get(id)
-    if (!track) return
-    track.filter.type = 'lowpass'
-    track.filter.frequency.setTargetAtTime(frequency, this.ctx.currentTime, 0.02)
   }
 
   // ---------------------------------------------------------- input devices
@@ -5603,8 +5560,6 @@ export class AudioEngine {
       panner.pan.value = track.pan
 
       const fxInput = offline.createGain()
-      const shaper = offline.createWaveShaper()
-      const filter = offline.createBiquadFilter()
       const fx = createBuiltinChain(offline, track.fx.state)
       const namSplit = offline.createGain()
       const namSum = offline.createGain()
@@ -5622,11 +5577,6 @@ export class AudioEngine {
       const dlSend = offline.createGain()
       const duckGain = offline.createGain()
 
-      if (track.shaper.curve) {
-        shaper.curve = new Float32Array(track.shaper.curve)
-      }
-      filter.type = track.filter.type
-      filter.frequency.value = track.filter.frequency.value
       gain.gain.value = track.muted ? 0 : track.volume * track.trim * track.phase
       const direct = track.mono ? 0.5 : 1
       const cross = track.mono ? 0.5 : 0
@@ -5639,8 +5589,6 @@ export class AudioEngine {
       duckGain.gain.value = 1
 
       panner.connect(fxInput)
-      fxInput.connect(shaper)
-      shaper.connect(filter)
 
       const pluginsMap = new Map(track.plugins.map((plugin) => [plugin.id, plugin]))
 
@@ -5675,7 +5623,7 @@ export class AudioEngine {
 
       const builtStandalone = new Map<string, { input: AudioNode; output: AudioNode }>()
 
-      let cursor: AudioNode = filter
+      let cursor: AudioNode = fxInput
       let parallelConnected = false
 
       for (const stage of track.chain) {

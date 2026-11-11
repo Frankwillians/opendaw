@@ -106,7 +106,7 @@ button {
 }
 
 /* The executable gets the operating system's own menu bar, and that bar is
-   built from these very rows — so in the native shell they stop taking a second
+   built from these very rows â€” so in the native shell they stop taking a second
    line but stay in the document, because it is what the native items read and
    what they press. */
 .menu-bar.native .menu-items {
@@ -344,7 +344,7 @@ button {
 
 /* TCP - track control panel */
 .tcp-panel {
-  width: 280px;
+  width: 296px;
   flex-shrink: 0;
   background: #232323;
   border-right: 2px solid #111;
@@ -396,10 +396,11 @@ button {
   background: linear-gradient(to bottom, #2e2e2e, #242424);
   border-bottom: 1px solid #141414;
   border-left: 4px solid #666;
-  padding: 8px;
+  position: relative;
+  padding: 8px 16px 8px 8px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   box-sizing: border-box;
 }
 
@@ -569,10 +570,31 @@ button {
   cursor: grabbing;
 }
 
+/* Medidor de nivel na propria track, como no REAPER: uma barra fina na borda
+   direita do cabeçalho, para ver o sinal de cada faixa sem abrir o mixer. */
+.tcp-meter {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  background: linear-gradient(to top, rgba(34, 197, 94, 0.1), rgba(0, 0, 0, 0) 65%), #0e0f12;
+  border-left: 1px solid #000;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.tcp-meter-fill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, #1f9d4d 0%, #34c268 70%, #d7a830 87%, #e05252 100%);
+  transition: clip-path 0.06s linear;
+}
+
 .tcp-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .track-number {
@@ -603,50 +625,80 @@ button {
   gap: 3px;
 }
 
+/* Buttons. A raised face, a dark edge and a pressed state: the same shape on the
+   track header and on the mixer strip, so a control reads as a control in both.
+   The colours stay the app's own â€” blue accents, warm mute, red arm. */
 .tcp-btn {
-  min-width: 24px;
-  height: 20px;
+  min-width: 23px;
+  height: 21px;
+  padding: 0 6px;
   font-size: 10px;
-  font-weight: bold;
-  border: 1px solid #111;
-  background: #383838;
-  color: #aaa;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #b9c4cf;
+  background: linear-gradient(180deg, #474951 0%, #35363d 52%, #2a2b31 100%);
+  border: 1px solid #0e0e11;
+  border-radius: 3px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 1px 1px rgba(0, 0, 0, 0.45);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.55);
   cursor: pointer;
-  border-radius: 2px;
-  padding: 0 4px;
+  box-sizing: border-box;
 }
 
 .tcp-btn:hover {
   color: #fff;
-  background: #474747;
+  background: linear-gradient(180deg, #55575f 0%, #414249 52%, #33343b 100%);
+}
+
+.tcp-btn:active {
+  background: linear-gradient(180deg, #26272c 0%, #2f3037 100%);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+  transform: translateY(1px);
 }
 
 .tcp-btn.btn-arm.armed {
-  background: #cc2222;
+  background: linear-gradient(180deg, #e35a5a 0%, #b81c1c 55%, #8f1010 100%);
+  border-color: #5d0b0b;
   color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 0 7px rgba(226, 60, 60, 0.5);
 }
 
 .tcp-btn.btn-mute.muted {
-  background: #d97706;
-  color: #fff;
+  background: linear-gradient(180deg, #efb44f 0%, #c07f12 55%, #95600a 100%);
+  border-color: #6b4406;
+  color: #1b1204;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 0 7px rgba(230, 160, 50, 0.4);
 }
 
 .tcp-btn.btn-solo.soloed {
-  background: #2563eb;
+  background: linear-gradient(180deg, #5f9df5 0%, #2563eb 55%, #1a4bb5 100%);
+  border-color: #12306d;
   color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 0 7px rgba(70, 130, 240, 0.45);
 }
 
 /* FX is a neutral button until there is a chain to open: a strip that is
    always green stops meaning anything. */
 .tcp-btn.btn-fx {
-  background: #2b3138;
   color: #9fb6c9;
-  letter-spacing: 0.02em;
 }
 
 .tcp-btn.btn-fx.has-fx {
-  background: #15803d;
+  background: linear-gradient(180deg, #3fa562 0%, #1c7a3c 55%, #14612f 100%);
+  border-color: #0c3d1e;
   color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 0 6px rgba(40, 160, 80, 0.4);
 }
 
 .tcp-controls-row {
@@ -655,15 +707,102 @@ button {
   gap: 6px;
 }
 
+/* Sliders: a dark groove and a light fader cap. The cap is the control - not a
+   round dot - so it reads as something you grab and push, like a console fader. */
+.tcp-slider,
+.mcp-pan,
+.mcp-fader {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
 .tcp-slider {
   flex: 1;
-  height: 4px;
-  accent-color: #79a8d6;
+  min-width: 0;
+  height: 18px;
+}
+
+.tcp-slider::-webkit-slider-runnable-track,
+.mcp-pan::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  border: 1px solid #0c0d10;
+  background: linear-gradient(180deg, #14161a, #2a2e35 55%, #383d45);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.85),
+    0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.tcp-slider::-webkit-slider-thumb,
+.mcp-pan::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 18px;
+  margin-top: -7px;
+  border: 1px solid #05060a;
+  border-radius: 2px;
+  background: linear-gradient(
+    180deg,
+    #f4f7fa 0%,
+    #ccd3db 40%,
+    #6f7781 50%,
+    #ccd3db 60%,
+    #eef2f6 100%
+  );
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.75),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.tcp-slider:hover::-webkit-slider-thumb,
+.mcp-pan:hover::-webkit-slider-thumb {
+  background: linear-gradient(
+    180deg,
+    #ffffff 0%,
+    #dfe6ee 40%,
+    #8791a0 50%,
+    #dfe6ee 60%,
+    #ffffff 100%
+  );
+}
+
+/* The mixer fader is the same control turned 90 degrees: a horizontal cap riding
+   a vertical groove. */
+.mcp-fader::-webkit-slider-runnable-track {
+  width: 6px;
+  height: 100%;
+  border-radius: 3px;
+  border: 1px solid #0c0d10;
+  background: linear-gradient(90deg, #14161a, #2a2e35 55%, #383d45);
+  box-shadow: inset 1px 0 2px rgba(0, 0, 0, 0.85);
+}
+
+.mcp-fader::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 13px;
+  margin-left: -7px;
+  border: 1px solid #05060a;
+  border-radius: 2px;
+  background: linear-gradient(
+    180deg,
+    #f4f7fa 0%,
+    #ccd3db 40%,
+    #6f7781 50%,
+    #ccd3db 60%,
+    #eef2f6 100%
+  );
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.75),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
 }
 
 .tcp-label {
   font-size: 9px;
-  color: #888;
+  letter-spacing: 0.05em;
+  color: #8b98a5;
   width: 24px;
 }
 
@@ -823,7 +962,7 @@ button {
   filter: brightness(1.08);
 }
 
-/* ------------------------- AUTOMAÇÃO DE VOLUME ------------------------- */
+/* ------------------------- AUTOMAÃ‡ÃƒO DE VOLUME ------------------------- */
 /* Opening a lane grows the track row instead of squeezing the clip: the
    waveform keeps the height it always had and the envelope gets its own strip.
    The height itself is set by the row-sync effect (header height + this
@@ -1052,16 +1191,17 @@ button {
 .mcp-channel {
   width: 96px;
   flex-shrink: 0;
-  background: linear-gradient(to bottom, #2a2a2a, #1f1f1f);
-  border: 1px solid #111;
+  background: linear-gradient(to bottom, #2d2d32, #1d1d21);
+  border: 1px solid #131316;
   border-top: 3px solid #444;
-  border-radius: 3px;
+  border-radius: 4px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 5px 4px;
-  gap: 3px;
+  padding: 6px 5px;
+  gap: 4px;
   overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
 .mcp-channel.master {
@@ -1069,8 +1209,8 @@ button {
 }
 
 .mcp-name {
-  font-size: 10px;
-  color: #ddd;
+  font-size: 10.5px;
+  color: #e4e9ef;
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
@@ -1080,7 +1220,7 @@ button {
 
 .mcp-meter-container {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   height: 58px;
   align-items: stretch;
   width: 100%;
@@ -1089,15 +1229,18 @@ button {
 
 .mcp-buttons {
   display: flex;
-  gap: 2px;
+  gap: 5px;
+  width: 100%;
   justify-content: center;
 }
 
 .mcp-buttons .tcp-btn {
-  min-width: 18px;
-  padding: 0 2px;
-  height: 18px;
-  font-size: 9px;
+  flex: 0 0 auto;
+  min-width: 22px;
+  padding: 0 3px;
+  height: 21px;
+  font-size: 9.5px;
+  border-radius: 3px;
 }
 
 /* The headphone glyph needs a touch more room than the m/s letters around it. */
@@ -1119,8 +1262,8 @@ button {
 }
 
 .mcp-meter {
-  width: 12px;
-  background: #0a0a0a;
+  width: 10px;
+  background: linear-gradient(to top, rgba(34, 197, 94, 0.1), rgba(0, 0, 0, 0) 65%), #0a0a0a;
   border: 1px solid #333;
   position: relative;
   overflow: hidden;
@@ -1128,24 +1271,22 @@ button {
 
 .mcp-meter-fill {
   position: absolute;
-  bottom: 0;
-  width: 100%;
-  background: linear-gradient(to top, #22c55e 60%, #eab308 85%, #ef4444 100%);
-  transition: height 0.05s ease-out;
+  inset: 0;
+  background: linear-gradient(to top, #1f9d4d 0%, #34c268 70%, #d7a830 87%, #e05252 100%);
+  transition: clip-path 0.06s linear;
 }
 
 .mcp-fader {
   writing-mode: vertical-lr;
   direction: rtl;
-  width: 18px;
+  width: 16px;
   height: 100%;
   accent-color: #79a8d6;
 }
 
 .mcp-pan {
   width: 100%;
-  accent-color: #79a8d6;
-  height: 4px;
+  height: 18px;
 }
 
 /* ------------------------- FX MODAL ------------------------- */
@@ -1227,8 +1368,8 @@ button {
   gap: 10px;
 }
 
-/* Barra discreta de progresso da exportação: ocupa a linha inteira acima dos
-   botões, sem empurrar o layout da janela. */
+/* Barra discreta de progresso da exportaÃ§Ã£o: ocupa a linha inteira acima dos
+   botÃµes, sem empurrar o layout da janela. */
 .fx-footer:has(> .export-progress) {
   flex-wrap: wrap;
 }
@@ -1556,12 +1697,13 @@ button {
   flex: 1;
   min-width: 0;
   height: 20px;
-  background: #141414;
-  border: 1px solid #3a3a3a;
-  color: #c8c8c8;
+  background: linear-gradient(180deg, #191c21, #101216);
+  border: 1px solid #0c0d10;
+  border-radius: 3px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.7);
+  color: #cfd8e2;
   font-size: 10px;
-  border-radius: 2px;
-  padding: 0 3px;
+  padding: 0 5px;
 }
 
 .input-select:focus {
@@ -1574,12 +1716,13 @@ button {
   flex: 1;
   min-width: 0;
   height: 20px;
-  background: #141414;
-  border: 1px solid #3a3a3a;
-  color: #c8c8c8;
+  background: linear-gradient(180deg, #191c21, #101216);
+  border: 1px solid #0c0d10;
+  border-radius: 3px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.7);
+  color: #cfd8e2;
   font-size: 10px;
-  border-radius: 2px;
-  padding: 0 3px;
+  padding: 0 5px;
 }
 
 .ch-select:focus {
@@ -1593,34 +1736,41 @@ button {
 }
 
 /* Monitor lives on the track as a headphone, not as a word: the TCP is narrow
-   and 🎧 reads at a glance in any language. */
+   and ðŸŽ§ reads at a glance in any language. */
 .mon-btn {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 4px;
-  height: 20px;
+  height: 19px;
   padding: 0 5px;
   font-size: 9px;
   font-weight: bold;
   letter-spacing: 0.4px;
-  background: #333;
-  border: 1px solid #111;
-  color: #999;
-  border-radius: 2px;
+  background: linear-gradient(180deg, #42434a 0%, #32333a 55%, #282930 100%);
+  border: 1px solid #0e0e11;
+  border-radius: 3px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+  color: #9aa4ae;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.5);
   cursor: pointer;
+  box-sizing: border-box;
 }
 
 .mon-btn:hover {
-  background: #414141;
+  background: linear-gradient(180deg, #4d4f57 0%, #3b3c44 55%, #2f3037 100%);
   color: #eee;
 }
 
 .mon-btn.on {
-  background: #166534;
-  border-color: #22c55e;
-  color: #dcfce7;
-  box-shadow: 0 0 6px rgba(34, 197, 94, 0.55);
+  background: linear-gradient(180deg, #3fa562 0%, #1c7a3c 55%, #14612f 100%);
+  border-color: #0c3d1e;
+  color: #eafff0;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 0 8px rgba(34, 197, 94, 0.5);
 }
 
 .mon-btn.idle {
@@ -1766,8 +1916,8 @@ button {
 }
 
 .mcp-input {
-  font-size: 8px;
-  color: #555;
+  font-size: 8.5px;
+  color: #7c8894;
   letter-spacing: 0.5px;
 }
 
@@ -1839,7 +1989,7 @@ button {
 }
 
 .signal-chain > * + *::before {
-  content: '›';
+  content: 'â€º';
   position: absolute;
   top: 50%;
   left: -18px;
@@ -2200,7 +2350,7 @@ button {
   min-width: 130px;
 }
 
-/* The reading of the file that was just written: INT / pico / máx / LRA. */
+/* The reading of the file that was just written: INT / pico / mÃ¡x / LRA. */
 .export-report {
   display: flex;
   flex-direction: column;
@@ -2649,7 +2799,7 @@ button {
   letter-spacing: 1px;
 }
 
-/* ------------------- SIGNAL CHAIN — AMPLITUBE-ISH CARDS / KNOBS ------------------- */
+/* ------------------- SIGNAL CHAIN â€” AMPLITUBE-ISH CARDS / KNOBS ------------------- */
 .chain-card {
   background: linear-gradient(180deg, #2e2e33 0%, #212126 45%, #1a1a1e 100%);
   border: 1px solid #46464d;
@@ -2835,7 +2985,7 @@ button {
   stroke: #6a6a75;
 }
 
-/* CAB button — cabinet (IR) attached to a specific NAM */
+/* CAB button â€” cabinet (IR) attached to a specific NAM */
 .chain-card .cab-btn {
   flex: 0 0 auto;
   height: 18px;
@@ -3657,17 +3807,17 @@ button {
 /* ============================ MIXING CONSOLE ============================ */
 
 .mixer-dock {
-  height: 232px;
-  flex: 0 0 232px;
+  height: 264px;
+  flex: 0 0 264px;
 }
 
 .mcp-channel {
-  width: 148px;
-  gap: 2px;
+  width: 156px;
+  gap: 4px;
 }
 
 .knob-compact {
-  width: 42px;
+  width: 40px;
 }
 
 .knob-compact .knob-label {
@@ -3718,7 +3868,7 @@ button {
 .mcp-preset {
   flex: 1;
   min-width: 0;
-  height: 18px;
+  height: 20px;
   padding: 0 2px;
   background: #232323;
   border: 1px solid #3d3d3d;
@@ -3882,10 +4032,10 @@ button {
   color: #86909a;
 }
 
-/* --------------------------- SUB-GRUPO: FX + AUTOMAÇÃO ---------------------------
-   A janela do sub-grupo reusa .master-fx-grid e .mfx-card. O que existe aqui é o
-   botão FX da strip e a lane de automação do bus, que precisa ser relativa (a
-   .automation-lane da timeline é absoluta) e ter altura própria. Nada estoura. */
+/* --------------------------- SUB-GRUPO: FX + AUTOMAÃ‡ÃƒO ---------------------------
+   A janela do sub-grupo reusa .master-fx-grid e .mfx-card. O que existe aqui Ã© o
+   botÃ£o FX da strip e a lane de automaÃ§Ã£o do bus, que precisa ser relativa (a
+   .automation-lane da timeline Ã© absoluta) e ter altura prÃ³pria. Nada estoura. */
 
 .mcp-buttons .tcp-btn.btn-group-fx {
   min-width: 30px;
@@ -3971,8 +4121,10 @@ button {
   font-size: 8.5px;
   font-weight: 700;
   letter-spacing: 0.3px;
-  border: 1px solid #3c4c5c;
-  background: #1b2228;
+  border: 1px solid #0e1114;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #3c4249 0%, #2a2f35 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
   color: #9aa7b2;
   cursor: pointer;
 }
@@ -4331,18 +4483,33 @@ button {
 
 .latency-row input[type="number"] {
   width: 46px;
-  background: #1b1b1b;
+  height: 18px;
+  background: linear-gradient(180deg, #101216, #191c21);
   color: #cfe0f0;
-  border: 1px solid #383838;
-  border-radius: 2px;
+  border: 1px solid #0c0d10;
+  border-radius: 3px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8);
   font-family: ui-monospace, Consolas, monospace;
   font-size: 10px;
-  padding: 2px 4px;
+  padding: 0 4px;
 }
 
 .latency-row .latency-auto {
-  color: #5f7285;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 3px;
+  color: #a9b6c2;
   font-family: ui-monospace, Consolas, monospace;
+  background: linear-gradient(180deg, #3c4249 0%, #2a2f35 100%);
+  border: 1px solid #0e1114;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.latency-row .latency-auto.on {
+  color: #0d1116;
+  background: linear-gradient(180deg, #a8cdf0 0%, #6d9cc8 100%);
+  border-color: #2b5a80;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 /* Disabled menu entries (undo/redo with an empty stack) must not light up on
@@ -4844,7 +5011,7 @@ button {
 /* ---------------- NATIVE PLUGIN CHAIN (the FX window's own list) ----------------
    REAPER's shape: one row per plugin, read top to bottom as the signal path. The
    rows are the chain, so they are the part that has to stay legible when a lane
-   carries six of them — no wrapping, no clipped buttons, the name takes the slack
+   carries six of them â€” no wrapping, no clipped buttons, the name takes the slack
    and ellipsises, the controls keep their own width. */
 .native-vst-chain {
   display: flex;
@@ -5070,7 +5237,7 @@ button {
   color: #e29090;
 }
 
-/* The live line: one row about the session in the plugin process — the round
+/* The live line: one row about the session in the plugin process â€” the round
    trip it costs, the blocks it missed, or the plugin's own refusal. It wraps
    rather than clipping, because the reason is the point of the row. */
 .native-vst-live {
@@ -5212,7 +5379,7 @@ button {
 }
 
 /* Two, three, four interfaces at once: each keeps enough height to read, and
-   when the sum no longer fits the column scrolls — the native window follows
+   when the sum no longer fits the column scrolls â€” the native window follows
    what is actually on the screen, and a face scrolled clean out of view has its
    window put away rather than painted over the FX window's edge. */
 .native-vst-faces {
@@ -5235,7 +5402,7 @@ button {
 .native-vst-faces > .native-vst-stage {
   /* The bar and the canvas are stacked, so the cross axis is the width: without
      stretch an empty canvas shrinks to nothing and the plugin would be placed on
-     a zero-width area. One face takes the whole column — a plugin that asked for
+     a zero-width area. One face takes the whole column â€” a plugin that asked for
      419px of canvas does not get the 260px left over by a strip. */
   flex: 1 1 auto;
   display: flex;
@@ -5290,8 +5457,8 @@ button {
   min-width: 0;
 }
 
-/* Without the split — the fallback for a chain that is not inside an FX window,
-   where the stack is drawn in the column itself — the faces keep the same
+/* Without the split â€” the fallback for a chain that is not inside an FX window,
+   where the stack is drawn in the column itself â€” the faces keep the same
    heights, only narrower. */
 .native-vst-faces:not(.fx-window > .native-vst-faces) {
   grid-column: auto;
@@ -5303,7 +5470,7 @@ button {
   min-height: 300px;
 }
 
-/* Embedded VST UI in the chain row — small card-sized interface */
+/* Embedded VST UI in the chain row â€” small card-sized interface */
 .native-vst-row {
   /* Allow the row to expand for embedded UI */
 }
@@ -5360,8 +5527,8 @@ button {
 
 /* ---------------- THE FX WINDOW AS A WINDOW ----------------
    A rack you cannot move is a rack you cannot work next to, and one you cannot
-   put away is a rack that owns the arrangement. The header is the handle — the
-   window itself shifts, the page behind it does not — and minimising leaves the
+   put away is a rack that owns the arrangement. The header is the handle â€” the
+   window itself shifts, the page behind it does not â€” and minimising leaves the
    bar and hides everything else, including the plugin pane portalled into this
    window, so the plugin's native window is put away with its pane instead of
    hovering over a closed rack. */
@@ -5781,7 +5948,7 @@ button {
 
 /* ============================ DEVICE WINDOW ============================ */
 /* One panel for the whole signal path: what comes in, what goes out, and the
-   latency the machine is really giving — the screen a producer reads before
+   latency the machine is really giving â€” the screen a producer reads before
    plugging a guitar in. */
 .devices-window {
   width: min(760px, 94vw);
@@ -5852,7 +6019,7 @@ button {
   color: #a8d0f0;
 }
 
-/* Three columns — device, what it delivers, who is patched to it — that collapse
+/* Three columns â€” device, what it delivers, who is patched to it â€” that collapse
    into one line when the panel is narrow, instead of clipping the last column. */
 .dev-row {
   display: grid;
@@ -5886,7 +6053,7 @@ button {
   white-space: nowrap;
 }
 
-/* The system cards. Unavailable ones stay readable — the reason is the point —
+/* The system cards. Unavailable ones stay readable â€” the reason is the point â€”
    but never pretend to be a button that works. */
 .dev-systems {
   display: grid;
@@ -6006,7 +6173,7 @@ button {
 
 /* ------------------------- COUNT-IN OVERLAY ------------------------- */
 /* The number a singer or a guitarist can see across the room. Nothing here
-   catches a click — it is a readout, not a control. */
+   catches a click â€” it is a readout, not a control. */
 .count-overlay {
   position: fixed;
   inset: 0;
@@ -6038,10 +6205,10 @@ button {
 
 /* ---------------------------------------------------------------- cabo virtual
    A janela que liga a master da DAW a uma sala SALA. Ela reusa .fx-window e
-   .reaper-btn; o que existe aqui é o barramento de jack, os dois medidores e a
+   .reaper-btn; o que existe aqui Ã© o barramento de jack, os dois medidores e a
    lista de participantes. Nada estoura: as linhas quebram em vez de cortar.
    O jack CABO/SALA saiu do strip do master: a sala se liga pelo menu Mix e o
-   retorno dela é uma entrada no IN da faixa, não um botão na mesa. */
+   retorno dela Ã© uma entrada no IN da faixa, nÃ£o um botÃ£o na mesa. */
 
 .sala-window {
   width: 560px;
@@ -6888,9 +7055,9 @@ button {
 
 
 
-/* ------------------------------ ATUALIZAÇÕES ------------------------------ */
-/* O aviso de versão nova vive na barra do topo, ao lado do logo: um chip que só
-   aparece quando o executável encontrou uma release mais nova. */
+/* ------------------------------ ATUALIZAÃ‡Ã•ES ------------------------------ */
+/* O aviso de versÃ£o nova vive na barra do topo, ao lado do logo: um chip que sÃ³
+   aparece quando o executÃ¡vel encontrou uma release mais nova. */
 .update-chip {
   align-self: center;
   margin-left: 10px;
@@ -7009,4 +7176,262 @@ button {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Roteamento no menu de contexto da track: o cabeçalho fica mínimo (nome,
+   entrada, pan e volume) e grupo/sidechain aparecem aqui, a um clique direito. */
+.clip-menu {
+  width: 264px;
+}
+
+.clip-menu-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 11px;
+  color: #c3ccd6;
+}
+
+.clip-menu-field > span:first-child {
+  flex: 0 0 64px;
+  font-size: 10px;
+  color: #8b98a5;
+  letter-spacing: 0.04em;
+}
+
+.clip-menu-field select {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px;
+  background: #1a1c21;
+  color: #dfe6ee;
+  border: 1px solid #33343a;
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.clip-menu-field select:focus {
+  outline: 1px solid #79a8d6;
+}
+
+.clip-menu-side {
+  align-items: flex-start;
+}
+
+.clip-menu-side .duck-sources {
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.clip-menu-field .tcp-slider {
+  flex: 1;
+  min-width: 0;
+}
+
+.clip-menu-field .value-badge {
+  flex: 0 0 auto;
+}
+
+
+
+
+/* Zoom e snap moraram numa barra propria; agora vivem na barra do transporte. */
+.transport-options .view-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 0;
+  padding: 0;
+  background: transparent;
+  border-bottom: none;
+}
+
+.transport-options .view-tools .tab-btn {
+  background: #2c2c30;
+  border: 1px solid #111;
+  border-radius: 3px;
+  color: #9aa6b2;
+  padding: 3px 7px;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.transport-options .view-tools .tab-btn:hover {
+  color: #dfe6ee;
+  background: #3a3b41;
+}
+
+.transport-options .view-tools .tab-btn.active {
+  color: #cfe2f3;
+  background: #3a4450;
+}
+
+.transport-options .view-tools .zoom-readout {
+  min-width: 52px;
+  font-size: 9px;
+}
+
+/* Clipe selecionado: o Delete apaga este clipe, nao a track inteira. */
+.audio-item.selected {
+  outline: 2px solid #79a8d6;
+  outline-offset: -2px;
+  box-shadow:
+    0 0 0 1px rgba(9, 12, 16, 0.9),
+    0 0 14px rgba(121, 168, 214, 0.35);
+  z-index: 2;
+}
+
+/* ------------------------- FX WINDOW: AMP + CADEIA ------------------------- */
+/* O amp sim vira um cartao compacto: modelo na linha de cima, os dois sliders
+   lado a lado embaixo, em vez de tres linhas de largura total. */
+.fx-amp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: linear-gradient(180deg, rgba(40, 48, 56, 0.5), rgba(24, 27, 31, 0.6));
+  border: 1px solid #333b44;
+  border-radius: 8px;
+}
+
+.fx-amp-card .fx-param {
+  background: rgba(18, 21, 24, 0.75);
+  padding: 6px 10px;
+  gap: 8px;
+}
+
+.fx-amp-card .fx-param label {
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: #9aa7b2;
+  white-space: nowrap;
+}
+
+.fx-amp-card .fx-param input[type='range'] {
+  width: 100%;
+  max-width: none;
+  flex: 1;
+  accent-color: #79a8d6;
+}
+
+.fx-amp-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* Cartoes da cadeia: altura natural (sem buraco embaixo dos que tem menos
+   knobs) e as setas de ordem so aparecem quando o cartao e tocado. */
+.signal-chain {
+  align-items: flex-start;
+}
+
+.card-head .card-move {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.chain-card:hover .card-head .card-move,
+.chain-card:focus-within .card-head .card-move {
+  opacity: 1;
+}
+
+/* Cadeia em uma linha, com rolagem horizontal: os cartoes param de quebrar e
+   de esticar, e a seta entre eles passa a ser um caractere de verdade. */
+.signal-chain {
+  flex-flow: row nowrap;
+  overflow-x: auto;
+  align-items: stretch;
+  scrollbar-width: thin;
+}
+
+.signal-chain .chain-card {
+  flex: 0 0 232px;
+  max-width: 232px;
+}
+
+.signal-chain .card-knobs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 2px;
+  justify-items: center;
+  align-content: start;
+  justify-content: initial;
+}
+
+.signal-chain .knob {
+  width: 100%;
+  max-width: 60px;
+}
+
+.signal-chain > * + *::before {
+  content: '\203A';
+}
+
+/* Cartoes com a mesma altura e knobs centrados: sem buraco embaixo dos que tem
+   menos parametros. */
+.signal-chain .chain-card {
+  height: 288px;
+}
+
+.signal-chain .card-knobs {
+  align-content: center;
+}
+
+/* O IN fica preso a esquerda quando a cadeia rola. */
+.signal-chain > .chain-endpoint:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+}
+
+/* A explicacao longa vira um bloco recolhido. */
+.fx-note summary {
+  cursor: pointer;
+  color: #79a8d6;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fx-note[open] summary {
+  margin-bottom: 6px;
+}
+
+/* O X de remover so fica vermelho no hover: quatro X acesos dominavam a cadeia. */
+.chain-card .chain-remove {
+  color: #8a9099;
+  opacity: 0.55;
+}
+
+.chain-card .chain-remove:hover {
+  color: #ff8a8a;
+  opacity: 1;
+}
+
+/* Amp sim: estagio fixo, estreito, so com o drive. */
+.signal-chain .card-amp {
+  flex: 0 0 132px;
+  max-width: 132px;
+}
+
+.chain-card.card-amp .card-head {
+  cursor: default;
+}
+
+.card-kind.kind-amp {
+  background: #5a4213;
+  border: 1px solid #9a7420;
+  color: #ffe2a6;
+}
+
+/* O cartao de adicionar acompanha a altura das unidades, sem esticar torto. */
+.signal-chain .chain-add {
+  height: 288px;
+  flex: 0 0 132px;
+  width: 132px;
 }

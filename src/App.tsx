@@ -651,6 +651,20 @@ function toHexColor(color: string): string {
   return /^#[0-9a-fA-F]{6}$/.test(color) ? color : '#79a8d6'
 }
 
+/** "C", "L 30", "R 45" — como um console imprime o pan. */
+/** Altura do medidor em % do valor, sem esticar o gradiente: o clip mantem
+ * verde/amarelo/vermelho presos ao nivel real, nao ao tamanho da barra. */
+function meterClip(level: number): { clipPath: string } {
+  const pct = Math.min(100, Math.round(level * 140))
+  return { clipPath: `inset(${100 - pct}% 0 0 0)` }
+}
+
+function panText(pan: number): string {
+  const amount = Math.round(Math.abs(pan) * 100)
+  if (amount === 0) return 'C'
+  return (pan < 0 ? 'L ' : 'R ') + amount
+}
+
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
   return Math.min(max, Math.max(min, value))
 }
@@ -2307,6 +2321,8 @@ export default function App() {
   const [peaks, setPeaks] = useState<Record<string, number[]>>({})
   const [fxTrackId, setFxTrackId] = useState<string | null>(null)
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null)
+  /** Clipe clicado: o Delete apaga ele, nunca a track inteira por engano. */
+  const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null)
   const [masterVolume, setMasterVolume] = useState(0.9)
   const [masterMuted, setMasterMuted] = useState(false)
   // Mixing bus: master FX rack + shared reverb/delay send config.
@@ -2808,11 +2824,6 @@ export default function App() {
     engine.setAutomation(track.id, track.automation)
     for (const fxId of BUILTIN_FX_IDS) engine.setBuiltinFx(track.id, fxId, track.fxRack[fxId])
     engine.setChainOrder(track.id, track.chain)
-    engine.setFxEnabled(track.id, track.hasFx)
-    if (track.hasFx) {
-      engine.setDrive(track.id, track.drive)
-      engine.setCabinet(track.id, track.cabinet)
-    }
     engine.setInstrument(
       track.id,
       track.kind === 'instrument' ? track.instrument : null,
@@ -4598,34 +4609,6 @@ export default function App() {
       return
     }
     openMarkerInputAt(step)
-  }
-
-  const toggleFx = (id: string, enabled: boolean) => {
-    const track = tracksRef.current.find((item) => item.id === id)
-    if (!track) return
-    const engine = engineRef.current
-    engine?.setFxEnabled(id, enabled)
-    if (enabled) {
-      engine?.setDrive(id, track.drive)
-      engine?.setCabinet(id, track.cabinet)
-    }
-    commitTracks(
-      tracksRef.current.map((item) => (item.id === id ? { ...item, hasFx: enabled } : item)),
-    )
-  }
-
-  const changeDrive = (id: string, value: number) => {
-    engineRef.current?.setDrive(id, value)
-    commitTracks(
-      tracksRef.current.map((track) => (track.id === id ? { ...track, drive: value } : track)),
-    )
-  }
-
-  const changeCabinet = (id: string, value: number) => {
-    engineRef.current?.setCabinet(id, value)
-    commitTracks(
-      tracksRef.current.map((track) => (track.id === id ? { ...track, cabinet: value } : track)),
-    )
   }
 
   // --------------------------------------------------- input device routing
@@ -10096,6 +10079,7 @@ export default function App() {
     togglePlay: () => {},
     goStart: () => {},
     removeSelected: () => {},
+  deleteSelection: () => {},
     duplicateSelected: () => {},
     muteSelected: () => {},
     soloSelected: () => {},
@@ -10117,6 +10101,14 @@ export default function App() {
     togglePlay,
     goStart: () => seek(0),
     removeSelected,
+    deleteSelection: () => {
+      if (selectedClip) {
+        removeClipById(selectedClip.trackId, selectedClip.clipId)
+        setSelectedClip(null)
+        return
+      }
+      removeSelected()
+    },
     duplicateSelected,
     muteSelected: toggleMuteSelected,
     soloSelected: toggleSoloSelected,
@@ -10417,7 +10409,15 @@ export default function App() {
     }
 
     schedule()
-    const observer = new ResizeObserver(schedule)
+    const observer = new ResizeObserver((entries) => {
+      // Altura mudou por conta própria (a linha CH apareceu, um take entrou):
+      // a medida guardada daquele cabeçalho deixa de valer e a lane acompanha.
+      for (const entry of entries) {
+        const id = (entry.target as HTMLElement).dataset?.trackId
+        if (id) naturalHeights.delete(id)
+      }
+      schedule()
+    })
     observer.observe(rows)
     for (const header of rows.querySelectorAll('[data-track-id]')) observer.observe(header)
 
@@ -10973,6 +10973,7 @@ export default function App() {
       /* pointer already gone */
     }
     // Mouse-only selection: always start selection on drag, click moves playhead
+    setSelectedClip(null)
     const anchor = snapStep(scrubStepFromEvent(event))
     selDragRef.current = { anchor }
     setTimeSel({ from: anchor, to: anchor })
@@ -11003,6 +11004,17 @@ export default function App() {
     trackId: string,
   ) => {
     if (event.button !== 0) return
+    // O que esta dentro da lane e um controle (o botao de importar, um clipe, a
+    // automacao) responde por si. Capturar o ponteiro na lane aqui roubava o
+    // clique desses botoes: pareciam clicaveis e nao faziam nada.
+    const target = event.target as HTMLElement | null
+    if (
+      target?.closest(
+        'button, input, select, textarea, a, .audio-item, .lane-import, .automation-lane, .lane-auto',
+      )
+    ) {
+      return
+    }
     try {
       event.currentTarget.setPointerCapture(event.pointerId)
     } catch {
@@ -11340,116 +11352,7 @@ export default function App() {
         </div>
 
         <div className="transport-options">
-          <div className="quick-actions" role="group" aria-label="Ações rápidas">
-            <button
-              type="button"
-              className="qa-btn"
-              onClick={undo}
-              disabled={historyDepth.undo === 0}
-              title={
-                historyDepth.undo === 0
-                  ? 'Nada para desfazer'
-                  : `Desfazer (Ctrl+Z) — ${historyDepth.undo} passo(s)`
-              }
-            >
-              ↶
-            </button>
-            <button
-              type="button"
-              className="qa-btn"
-              onClick={redo}
-              disabled={historyDepth.redo === 0}
-              title={
-                historyDepth.redo === 0
-                  ? 'Nada para refazer'
-                  : `Refazer (Ctrl+Shift+Z) — ${historyDepth.redo} passo(s)`
-              }
-            >
-              ↷
-            </button>
-            <span className="qa-sep" aria-hidden="true" />
-            <button
-              type="button"
-              className="qa-btn"
-              onClick={addTrack}
-              title="Nova track de áudio · Track ▸ Inserir Track"
-            >
-              ＋
-            </button>
-            {INSTRUMENT_KINDS.map((kind) => (
-              <button
-                type="button"
-                className="qa-btn"
-                key={kind}
-                onClick={() => addInstrumentTrack(kind)}
-                title={`Nova track de ${instrumentLabel(kind).toLowerCase()} · Track ▸ Nova Track de ${instrumentLabel(kind)}`}
-              >
-                {instrumentIcon(kind)}
-              </button>
-            ))}
-            <button
-              type="button"
-              className={`qa-btn key-toggle ${pcKeys ? 'on' : ''}`}
-              onClick={togglePcKeys}
-              title={
-                pcKeys
-                  ? 'Teclado ligado: em piano/baixo A a ; tocam a escala (Z e X mudam de oitava); na bateria A ; são kick, caixa e pratos, Q U os agudos · Esc solta tudo'
-                  : 'Ligar o teclado do computador para tocar piano, baixo e bateria sem interface MIDI'
-              }
-            >
-              ⌨
-            </button>
-            <span className="qa-sep" aria-hidden="true" />
-            <button
-              type="button"
-              className="qa-btn"
-              onClick={() => openAudioImport()}
-              title="Importar áudio para a track selecionada · File ▸ Importar Áudio"
-            >
-              ⬆
-            </button>
-            <button
-              type="button"
-              className="qa-btn danger"
-              onClick={removeSelected}
-              disabled={!selectedTrackId}
-              title="Remover a track selecionada (Del) · Track ▸ Remover Selecionada"
-            >
-              ✕
-            </button>
-            <button
-              type="button"
-              className="qa-btn"
-              onClick={openExport}
-              title="Exportar a mixagem em WAV (Ctrl+E) · File ▸ Exportar Áudio"
-            >
-              ⬇
-            </button>
-            <span className="qa-sep" aria-hidden="true" />
-            <button
-              type="button"
-              className={`qa-btn ${showMixer ? 'active' : ''}`}
-              onClick={() => setShowMixer((value) => !value)}
-              title={showMixer ? 'Ocultar o mixer' : 'Mostrar o mixer'}
-              aria-pressed={showMixer}
-            >
-              🎚
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* Toolbar above both columns: the track headers and the ruler now start
-          at the same y, which is what keeps the grid readable. */}
-      <div className="workspace-tabs">
-        <button
-          type="button"
-          className={`tab-btn ${activeTab === 'arrangement' ? 'active' : ''}`}
-          onClick={() => setActiveTab('arrangement')}
-        >
-          Arrangement
-        </button>
-        <div className="view-tools" role="group" aria-label="Zoom e snap">
+          <div className="view-tools" role="group" aria-label="Zoom e snap">
           <button
             type="button"
             className={`tab-btn ${snapEnabled ? 'active' : ''}`}
@@ -11487,8 +11390,52 @@ export default function App() {
             Fit
           </button>
         </div>
-      </div>
+          <span className="qa-sep" aria-hidden="true" />
+          <div className="quick-actions" role="group" aria-label="Ações rápidas">
+            <button
+              type="button"
+              className="qa-btn"
+              onClick={undo}
+              disabled={historyDepth.undo === 0}
+              title={
+                historyDepth.undo === 0
+                  ? 'Nada para desfazer'
+                  : `Desfazer (Ctrl+Z) — ${historyDepth.undo} passo(s)`
+              }
+            >
+              ↶
+            </button>
+            <button
+              type="button"
+              className="qa-btn"
+              onClick={redo}
+              disabled={historyDepth.redo === 0}
+              title={
+                historyDepth.redo === 0
+                  ? 'Nada para refazer'
+                  : `Refazer (Ctrl+Shift+Z) — ${historyDepth.redo} passo(s)`
+              }
+            >
+              ↷
+            </button>
+            <span className="qa-sep" aria-hidden="true" />
+            {INSTRUMENT_KINDS.map((kind) => (
+              <button
+                type="button"
+                className="qa-btn"
+                key={kind}
+                onClick={() => addInstrumentTrack(kind)}
+                title={`Nova track de ${instrumentLabel(kind).toLowerCase()} · Track ▸ Nova Track de ${instrumentLabel(kind)}`}
+              >
+                {instrumentIcon(kind)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
 
+      {/* Toolbar above both columns: the track headers and the ruler now start
+          at the same y, which is what keeps the grid readable. */}
       <main className="daw-workspace">
         <aside className="tcp-panel">
           <div className="tcp-head" ref={tcpHeadRef}>
@@ -11541,6 +11488,7 @@ export default function App() {
                   </button>
                   <input
                     className="track-title folder-title"
+                    placeholder="Pasta"
                     value={track.name}
                     onChange={(event) => renameTrack(track.id, event.target.value)}
                     aria-label={`Nome da pasta ${track.name}`}
@@ -11615,6 +11563,12 @@ export default function App() {
                 reorderTracksTo(dragged, track.id)
               }}
             >
+              <div className="tcp-meter" aria-hidden="true">
+                <div
+                  className="tcp-meter-fill"
+                  style={meterClip(levels[track.id] ?? 0)}
+                />
+              </div>
               <div className="tcp-header">
                 <span
                   className="track-grip"
@@ -11643,6 +11597,7 @@ export default function App() {
                 />
                 <input
                   className="track-title"
+                  placeholder="Track"
                   value={track.name}
                   onChange={(event) => renameTrack(track.id, event.target.value)}
                   aria-label={`Nome da track ${track.number}`}
@@ -11808,7 +11763,7 @@ export default function App() {
               </>
               )}
 
-              <div className="tcp-controls-row">
+                            <div className="tcp-controls-row">
                 <span className="tcp-label">PAN</span>
                 <input
                   type="range"
@@ -11818,7 +11773,7 @@ export default function App() {
                   step={0.05}
                   value={track.pan}
                   onChange={(event) => changePan(track.id, Number(event.target.value))}
-                  title={`Pan: ${track.pan.toFixed(2)}`}
+                  title="PAN"
                 />
               </div>
               <div className="tcp-controls-row">
@@ -11846,96 +11801,7 @@ export default function App() {
                   {AUTO_MODE_LABEL[track.autoMode]}
                 </button>
               </div>
-              {/* Routing lives on the row itself: who the track is sent to, and
-                  who is allowed to push its fader down. */}
-              <div className="tcp-controls-row route-row">
-                <span
-                  className="tcp-label"
-                  title="Sub-grupo: o fader, o pan e o mute deste grupo valem para todas as tracks dentro dele — no navegador e no arquivo exportado"
-                >
-                  GRUPO
-                </span>
-                <select
-                  className="route-select"
-                  value={track.groupId}
-                  onChange={(event) => assignGroup(track.id, event.target.value)}
-                  title={
-                    groups.length === 0
-                      ? 'Nenhum grupo ainda — Track ▸ Novo sub-grupo'
-                      : 'Para qual sub-grupo esta track toca'
-                  }
-                >
-                  <option value="">Master</option>
-                  {groups.map((group) => (
-                    <option key={group.id} value={group.id}>
-                      {group.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {/* Sidechain gets its own row: chips, the "+ fonte" picker and the
-                  depth slider together need more than a fader's width, and a row
-                  that squeezes them clips the last chip in half. */}
-              <div className="tcp-controls-row route-row side-row">
-                <span
-                  className="tcp-label"
-                  title="Sidechain (duck): esta track abaixa sempre que alguma das fontes tocar. Com mais de uma, o duck segue a soma - como um compressor externo com duas entradas no sidechain."
-                >
-                  SIDE
-                </span>
-                <div className="duck-sources">
-                  {track.duckSourceIds.map((sourceId) => {
-                    const source = tracks.find((other) => other.id === sourceId)
-                    return (
-                      <button
-                        key={sourceId}
-                        type="button"
-                        className="duck-chip"
-                        style={{ borderColor: source?.color }}
-                        onClick={() => toggleDuckSource(track.id, sourceId)}
-                        title={`"${source?.name ?? sourceId}" abre a gate desta track — clique para tirá-la do sidechain`}
-                      >
-                        {source ? `#${source.number}` : '?'}
-                        <em>×</em>
-                      </button>
-                    )
-                  })}
-                  <select
-                    className="route-select duck-add"
-                    value=""
-                    onChange={(event) => {
-                      if (event.target.value !== '') toggleDuckSource(track.id, event.target.value)
-                    }}
-                    title="Acrescenta uma fonte ao sidechain; com várias, o duck segue a soma delas"
-                    disabled={duckAvailable.length === 0}
-                  >
-                    <option value="">+ fonte</option>
-                    {duckAvailable.map((other) => (
-                      <option key={other.id} value={other.id}>
-                        #{other.number} {other.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {track.duckSourceIds.length > 0 ? (
-                  <>
-                    <input
-                      type="range"
-                      className="tcp-slider duck-slider"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={track.duckDepth}
-                      onChange={(event) =>
-                        setSidechain(track.id, track.duckSourceIds, Number(event.target.value))
-                      }
-                      title="Profundidade do duck: quanto o volume desce quando as fontes tocam"
-                    />
-                    <span className="value-badge">{Math.round(track.duckDepth * 100)}</span>
-                  </>
-                ) : null}
-              </div>
-              {track.kind === 'audio' && track.takes.length > 0 ? (
+                            {track.kind === 'audio' && track.takes.length > 0 ? (
                 <div className="track-actions take-actions">
                   <select
                     className="mini-select"
@@ -12227,7 +12093,11 @@ export default function App() {
                     {clipStyles(track).map((clipStyle) => (
                       <div
                         key={clipStyle.id}
-                        className="audio-item clip-draggable"
+                        className={`audio-item clip-draggable ${
+                          selectedClip?.trackId === track.id && selectedClip.clipId === clipStyle.id
+                            ? 'selected'
+                            : ''
+                        }`}
                         style={{ borderColor: track.color, left: clipStyle.left, width: clipStyle.width }}
                         title="Arraste para mover no tempo · solte sobre outra lane para trocar de track · botão direito para opções"
                         onPointerDown={(event) => onClipPointerDown(event, track, clipStyle.id)}
@@ -12470,7 +12340,7 @@ export default function App() {
               <span>ms</span>
               <button
                 type="button"
-                className="mini-btn latency-auto"
+                className={`mini-btn latency-auto ${recordLatencyMs < 0 ? 'on' : ''}`}
                 onClick={() => {
                   const engine = engineRef.current
                   const measured = engine?.latencyMs() ?? 0
@@ -12489,7 +12359,7 @@ export default function App() {
               <div
                 key={group.id}
                 className="mcp-channel group"
-                style={{ borderColor: group.color }}
+                style={{ borderTopColor: group.color }}
                 title={`Sub-grupo — ${
                   tracks.filter((track) => track.groupId === group.id).length
                 } track(s) dentro`}
@@ -12511,7 +12381,7 @@ export default function App() {
                     title="Mutar o grupo inteiro"
                     onClick={() => changeGroup(group.id, { isMuted: !group.isMuted })}
                   >
-                    m
+                    M
                   </button>
                   <button
                     type="button"
@@ -12522,23 +12392,23 @@ export default function App() {
                     FX
                   </button>
                 </div>
-                <input
-                  type="range"
-                  className="mcp-pan"
-                  min={-1}
-                  max={1}
-                  step={0.05}
-                  value={group.pan}
-                  onChange={(event) => changeGroup(group.id, { pan: Number(event.target.value) })}
-                  title="PAN do grupo"
-                />
                 <div className="mcp-meter-container">
+                  <Knob
+                    label="PAN"
+                    size={24}
+                    value={group.pan}
+                    min={-1}
+                    max={1}
+                    step={0.05}
+                    display={panText(group.pan)}
+                    accent="#79a8d6"
+                    title="Panoramica do grupo"
+                    onInput={(next) => changeGroup(group.id, { pan: next })}
+                  />
                   <div className="mcp-meter">
                     <div
                       className="mcp-meter-fill"
-                      style={{
-                        height: `${Math.min(100, Math.round((levels[group.id] ?? 0) * 140))}%`,
-                      }}
+                      style={meterClip(levels[group.id] ?? 0)}
                     />
                   </div>
                   <input
@@ -12571,7 +12441,7 @@ export default function App() {
               <div
                 key={aux.id}
                 className="mcp-channel aux"
-                style={{ borderColor: aux.color }}
+                style={{ borderTopColor: aux.color }}
                 title={`Barramento aux — ${
                   tracks.filter((track) => (track.auxSends?.[aux.id] ?? 0) > 0).length
                 } track(s) enviando`}
@@ -12593,7 +12463,7 @@ export default function App() {
                     title="Mutar o retorno do aux"
                     onClick={() => changeAux(aux.id, { isMuted: !aux.isMuted })}
                   >
-                    m
+                    M
                   </button>
                   <button
                     type="button"
@@ -12608,9 +12478,7 @@ export default function App() {
                   <div className="mcp-meter">
                     <div
                       className="mcp-meter-fill"
-                      style={{
-                        height: `${Math.min(100, Math.round((levels[aux.id] ?? 0) * 140))}%`,
-                      }}
+                      style={meterClip(levels[aux.id] ?? 0)}
                     />
                   </div>
                   <input
@@ -12641,7 +12509,7 @@ export default function App() {
               <div
                 key={track.id}
                 className={`mcp-channel ${selectedTrackId === track.id ? 'selected' : ''}`}
-                style={{ borderColor: track.color }}
+                style={{ borderTopColor: track.color }}
                 onClick={() => setSelectedTrackId(track.id)}
               >
                 <div className="mcp-name">{track.name}</div>
@@ -12685,21 +12553,23 @@ export default function App() {
                     FX{track.plugins.length > 0 ? ` ${track.plugins.length}` : ''}
                   </button>
                 </div>
-                <input
-                  type="range"
-                  className="mcp-pan"
-                  min={-1}
-                  max={1}
-                  step={0.05}
-                  value={track.pan}
-                  onChange={(event) => changePan(track.id, Number(event.target.value))}
-                  title="PAN"
-                />
                 <div className="mcp-meter-container">
+                  <Knob
+                    label="PAN"
+                    size={24}
+                    value={track.pan}
+                    min={-1}
+                    max={1}
+                    step={0.05}
+                    display={panText(track.pan)}
+                    accent="#79a8d6"
+                    title="Panoramica - arraste na vertical, Shift = fino, scroll = 1 passo"
+                    onInput={(next) => changePan(track.id, next)}
+                  />
                   <div className="mcp-meter">
                     <div
                       className="mcp-meter-fill"
-                      style={{ height: `${Math.min(100, Math.round((levels[track.id] ?? 0) * 140))}%` }}
+                      style={meterClip(levels[track.id] ?? 0)}
                     />
                   </div>
                   <input
@@ -12850,7 +12720,7 @@ export default function App() {
                 <div className="mcp-meter">
                   <div
                     className="mcp-meter-fill"
-                    style={{ height: `${Math.min(100, Math.round(masterLevel * 140))}%` }}
+                    style={meterClip(masterLevel)}
                   />
                 </div>
                 <input
@@ -13211,7 +13081,7 @@ export default function App() {
             className="clip-menu"
             style={{
               left: Math.min(trackMenu.x, window.innerWidth - 230),
-              top: Math.min(trackMenu.y, window.innerHeight - 360),
+              top: Math.min(trackMenu.y, window.innerHeight - 470),
             }}
             onClick={(event) => event.stopPropagation()}
           >
@@ -13286,6 +13156,98 @@ export default function App() {
                   <span>Ctrl+V</span>
                 </button>
               </>
+            ) : null}
+            <div className="clip-menu-sep" />
+            <div className="clip-menu-heading">Roteamento</div>
+            <label className="clip-menu-field">
+              <span>Grupo</span>
+              <select
+                value={trackMenuTrack.groupId}
+                onChange={(event) => assignGroup(trackMenuTrack.id, event.target.value)}
+                title="Sub-grupo: fader, pan e mute valem para todas as tracks dele"
+              >
+                <option value="">Master</option>
+                {groups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="clip-menu-field clip-menu-side">
+              <span>Sidechain</span>
+              <div className="duck-sources">
+                {trackMenuTrack.duckSourceIds.map((sourceId) => {
+                  const source = tracks.find((other) => other.id === sourceId)
+                  return (
+                    <button
+                      key={sourceId}
+                      type="button"
+                      className="duck-chip"
+                      style={{ borderColor: source?.color }}
+                      onClick={() => toggleDuckSource(trackMenuTrack.id, sourceId)}
+                      title="Clique para tirar esta fonte do sidechain"
+                    >
+                      {source ? '#' + source.number : '?'}
+                      <em>×</em>
+                    </button>
+                  )
+                })}
+                <select
+                  className="route-select duck-add"
+                  value=""
+                  onChange={(event) => {
+                    if (event.target.value !== '') {
+                      toggleDuckSource(trackMenuTrack.id, event.target.value)
+                    }
+                  }}
+                  title="Acrescenta uma fonte ao sidechain; com várias, o duck segue a soma delas"
+                  disabled={
+                    tracks.filter(
+                      (other) =>
+                        !other.isFolder &&
+                        other.id !== trackMenuTrack.id &&
+                        !trackMenuTrack.duckSourceIds.includes(other.id),
+                    ).length === 0
+                  }
+                >
+                  <option value="">+ fonte</option>
+                  {tracks
+                    .filter(
+                      (other) =>
+                        !other.isFolder &&
+                        other.id !== trackMenuTrack.id &&
+                        !trackMenuTrack.duckSourceIds.includes(other.id),
+                    )
+                    .map((other) => (
+                      <option key={other.id} value={other.id}>
+                        #{other.number} {other.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+            {trackMenuTrack.duckSourceIds.length > 0 ? (
+              <label className="clip-menu-field">
+                <span>Duck</span>
+                <input
+                  type="range"
+                  className="tcp-slider"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={trackMenuTrack.duckDepth}
+                  onChange={(event) =>
+                    setSidechain(
+                      trackMenuTrack.id,
+                      trackMenuTrack.duckSourceIds,
+                      Number(event.target.value),
+                    )
+                  }
+                  title="Profundidade do duck: quanto o volume desce quando as fontes tocam"
+                />
+                <span className="value-badge">{Math.round(trackMenuTrack.duckDepth * 100)}</span>
+              </label>
             ) : null}
             <div className="clip-menu-sep" />
             <button
@@ -14802,44 +14764,6 @@ export default function App() {
             </div>
             <div className="fx-body fx-body-scroll">
               <div className="fx-section-title">Amp Sim integrado</div>
-              <div className="fx-param">
-                <label htmlFor="plugin-amp">Modelo:</label>
-                <select
-                  id="plugin-amp"
-                  className="reaper-input"
-                  value={fxTrack.hasFx ? 'on' : 'off'}
-                  onChange={(event) => toggleFx(fxTrack.id, event.target.value === 'on')}
-                >
-                  <option value="off">Bypass (clean)</option>
-                  <option value="on">High Gain (waveshaper)</option>
-                </select>
-              </div>
-              <div className="fx-param">
-                <label htmlFor="fx-drive">Preamp Gain / Drive:</label>
-                <input
-                  id="fx-drive"
-                  type="range"
-                  min={1}
-                  max={100}
-                  value={fxTrack.drive}
-                  onChange={(event) => changeDrive(fxTrack.id, Number(event.target.value))}
-                />
-                <span className="value-badge">{fxTrack.drive}</span>
-              </div>
-              <div className="fx-param">
-                <label htmlFor="fx-cab">Cabinet Lowpass (Hz):</label>
-                <input
-                  id="fx-cab"
-                  type="range"
-                  min={1000}
-                  max={8000}
-                  value={fxTrack.cabinet}
-                  disabled={!fxTrack.hasFx}
-                  onChange={(event) => changeCabinet(fxTrack.id, Number(event.target.value))}
-                />
-                <span className="value-badge">{fxTrack.cabinet}</span>
-              </div>
-
               <div className="fx-section-title">
                 <span>
                   Signal Chain <span className="fx-section-hint">(ordem real do áudio)</span>
@@ -14926,6 +14850,7 @@ export default function App() {
 
               <div className="signal-chain">
                 <div className="chain-endpoint">IN</div>
+
                 {fxChainEntries.map((item, index) =>
                   item.kind === 'builtin' ? (
                     (() => {
@@ -15459,7 +15384,9 @@ export default function App() {
                 </div>
               ) : null}
 
-              <div className="plugin-note">
+              <details className="plugin-note fx-note">
+                  <summary>Como a cadeia funciona</summary>
+                  
                 Arraste os cartões (ou use ◀/▶) para reordenar. Em <strong>+ Efeito</strong> você
                 adiciona um efeito embutido ou um <strong>VST/VST3</strong>; todos entram na própria
                 cadeia, na ordem em que o áudio os atravessa. O <strong>UI</strong> abre a interface
@@ -15483,7 +15410,7 @@ export default function App() {
                     próprio navegador processa.
                   </>
                 ) : null}
-              </div>
+              </details>
             </div>
             <div className="fx-footer">
               <button

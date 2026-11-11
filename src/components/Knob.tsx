@@ -21,6 +21,9 @@ interface KnobProps {
   size?: number
   /** Optional tooltip override; defaults to a label + hint string. */
   title?: string
+  /** Inicio e fim do arraste: a automacao touch/write precisa saber quando comeca. */
+  onStart?: () => void
+  onEnd?: () => void
   onInput: (next: number) => void
 }
 
@@ -36,6 +39,8 @@ export default function Knob({
   accent = '#6fcf97',
   size = 56,
   title,
+  onStart,
+  onEnd,
   onInput,
 }: KnobProps) {
   const dragRef = useRef<{ startY: number; startValue: number } | null>(null)
@@ -63,6 +68,7 @@ export default function Knob({
       /* pointer already gone */
     }
     dragRef.current = { startY: event.clientY, startValue: value }
+    onStart?.()
   }
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current
@@ -72,6 +78,7 @@ export default function Knob({
     onInput(clampToStep(drag.startValue + delta, min, max, step))
   }
   const endDrag = () => {
+    if (dragRef.current) onEnd?.()
     dragRef.current = null
   }
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {

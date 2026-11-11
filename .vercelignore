@@ -19,4 +19,4 @@ desktop/spike-*
 *.dll
 *.node
 *.wav
-*.blockmap
+*.blockmap.chrome*
