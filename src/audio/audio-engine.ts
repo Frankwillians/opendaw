@@ -4924,7 +4924,7 @@ export class AudioEngine {
       }]
 
       const trackSources: AudioBufferSourceNode[] = []
-      const isSelectionLoop = toStep !== undefined && fromStep > 0
+      const isSelectionLoop = toStep !== undefined
       const loopStart = isSelectionLoop ? fromStep : 0
       const loopEnd = isSelectionLoop ? toStep! : Infinity
 
