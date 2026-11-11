@@ -4898,7 +4898,9 @@ export class AudioEngine {
   /**
    * Schedules every recorded clip relative to the song position.
    * `stepDuration` is the length of a 16th note in seconds.
-   * `toStep` limits scheduling to clips that start before this step (for selection loops).
+   * `toStep` limits scheduling to the selection loop region [fromStep, toStep).
+   * When toStep is provided (selection loop), only the portion of clips that
+   * falls within this region is scheduled, and it repeats on each loop iteration.
    */
   startBuffersAt(when: number, stepDuration: number, fromStep: number, toStep?: number): void {
     // Automation is written in steps and scheduled in seconds; this is the
@@ -4922,6 +4924,10 @@ export class AudioEngine {
       }]
 
       const trackSources: AudioBufferSourceNode[] = []
+      const isSelectionLoop = toStep !== undefined && fromStep > 0
+      const loopStart = isSelectionLoop ? fromStep : 0
+      const loopEnd = isSelectionLoop ? toStep! : Infinity
+
       for (const clip of clipsToPlay) {
         const take = clip.monitor?.buffer ?? clip.buffer
         if (!take) continue
@@ -4931,30 +4937,40 @@ export class AudioEngine {
         source.connect(shape)
         shape.connect(track.panner)
 
-        const end = this.clipEndForClip(clip)
-        const delta = clip.clipStart - fromStep
-        // When fromStep > 0 (loop wrap), only schedule clips that start at or after
-        // the loop point. Clips starting before the loop point should not be
-        // re-triggered with an offset - they either already played or are outside
-        // the selection region being looped.
-        if (fromStep > 0 && clip.clipStart < fromStep) {
-          continue
-        }
-        // If toStep is provided (selection loop), only schedule clips that start
-        // before the loop end. Clips at or after toStep belong to the next loop
-        // iteration or are outside the selection.
-        if (toStep !== undefined && clip.clipStart >= toStep) {
-          continue
-        }
-        if (delta >= 0) {
-          const t0 = when + delta * stepDuration
-          source.start(t0, 0, Math.max(0.02, end))
-          scheduleClipFade(shape, t0, 0, end, clip.fadeIn, clip.fadeOut)
+        const clipEndStep = clip.clipStart + this.clipEndForClip(clip) / stepDuration
+
+        if (isSelectionLoop) {
+          // Selection loop: find overlap between clip and loop region [loopStart, loopEnd)
+          const overlapStart = Math.max(clip.clipStart, loopStart)
+          const overlapEnd = Math.min(clipEndStep, loopEnd)
+          if (overlapStart >= overlapEnd) continue // No overlap with loop region
+
+          // Schedule only the overlapping portion
+          const offsetSteps = overlapStart - clip.clipStart
+          const durationSteps = overlapEnd - overlapStart
+          const offsetSeconds = offsetSteps * stepDuration
+          const durationSeconds = durationSteps * stepDuration
+
+          source.start(when, offsetSeconds, Math.max(0.02, durationSeconds))
+          // Fades are relative to the clip, so we need to map them to the loop region
+          // For simplicity, apply fade at loop boundaries if the overlap touches clip edges
+          const fadeIn = overlapStart === clip.clipStart ? clip.fadeIn : 0
+          const fadeOut = overlapEnd === clipEndStep ? clip.fadeOut : 0
+          scheduleClipFade(shape, when, offsetSeconds, durationSeconds, fadeIn, fadeOut)
         } else {
-          const offset = -delta * stepDuration
-          if (offset >= end) continue
-          source.start(when, offset, Math.max(0.02, end - offset))
-          scheduleClipFade(shape, when, offset, end, clip.fadeIn, clip.fadeOut)
+          // Normal playback (from start or full arrangement loop)
+          const end = this.clipEndForClip(clip)
+          const delta = clip.clipStart - fromStep
+          if (delta >= 0) {
+            const t0 = when + delta * stepDuration
+            source.start(t0, 0, Math.max(0.02, end))
+            scheduleClipFade(shape, t0, 0, end, clip.fadeIn, clip.fadeOut)
+          } else {
+            const offset = -delta * stepDuration
+            if (offset >= end) continue
+            source.start(when, offset, Math.max(0.02, end - offset))
+            scheduleClipFade(shape, when, offset, end, clip.fadeIn, clip.fadeOut)
+          }
         }
         // Prune finished sources so a long looping session never accumulates them.
         source.onended = () => {
