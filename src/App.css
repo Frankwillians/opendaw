@@ -7343,6 +7343,7 @@ button {
    de esticar, e a seta entre eles passa a ser um caractere de verdade. */
 .signal-chain {
   flex-flow: row nowrap;
+  flex-shrink: 0;
   overflow-x: auto;
   align-items: stretch;
   scrollbar-width: thin;
@@ -7371,10 +7372,10 @@ button {
   content: '\203A';
 }
 
-/* Cartoes com a mesma altura e knobs centrados: sem buraco embaixo dos que tem
-   menos parametros. */
+/* O maior cartao define a altura da fileira: todos ficam alinhados, mas NAMs
+   com mais controles podem crescer sem deixar knobs fora da borda. */
 .signal-chain .chain-card {
-  height: 288px;
+  min-height: 288px;
 }
 
 .signal-chain .card-knobs {
@@ -7431,7 +7432,7 @@ button {
 
 /* O cartao de adicionar acompanha a altura das unidades, sem esticar torto. */
 .signal-chain .chain-add {
-  height: 288px;
+  min-height: 288px;
   flex: 0 0 132px;
   width: 132px;
 }
