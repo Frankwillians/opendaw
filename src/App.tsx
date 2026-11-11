@@ -6799,7 +6799,15 @@ export default function App() {
     songStartRef.current = when - start * stepDuration
     nextStepRef.current = start
     nextTimeRef.current = when
-    engine.startBuffersAt(when, stepDuration, start)
+    // Respect selection loop if active
+    const sel = timeSelRef.current
+    if (sel && loopRef.current && sel.from !== sel.to) {
+      const fromStep = Math.floor(sel.from / stepDuration)
+      const toStep = Math.floor(sel.to / stepDuration)
+      engine.startBuffersAt(when, stepDuration, fromStep, toStep)
+    } else {
+      engine.startBuffersAt(when, stepDuration, start)
+    }
     setPlayheadStep(start)
     setIsPlaying(true)
     beginAutomationCapture()
