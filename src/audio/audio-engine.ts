@@ -1523,7 +1523,8 @@ export class AudioEngine {
   private readonly groups = new Map<string, GroupBus>()
   /** Producer-created aux send buses, keyed by aux id. */
   private readonly auxes = new Map<string, AuxBus>()
-  private readonly sources: AudioBufferSourceNode[] = []
+  /** Sources keyed by trackId so we can reschedule a single track's clips. */
+  private readonly sources = new Map<string, AudioBufferSourceNode[]>()
   // Live instrument voices share a per-note gate; disconnecting the gate
   // silences every node of the voice at once (seek, stop, loop restart).
   private readonly voiceGates: Array<{
@@ -4905,7 +4906,7 @@ export class AudioEngine {
     this.songOriginTime = when - fromStep * this.songStepDuration
     this.tracks.forEach((track) => this.scheduleAutomation(track, fromStep))
     this.groups.forEach((group) => this.scheduleGroupAutomation(group, fromStep))
-    this.tracks.forEach((track) => {
+    for (const [trackId, track] of this.tracks) {
       // Play all clips on this track (multi-clip support)
       const clipsToPlay = track.clips.length > 0 ? track.clips : [{
         // Legacy single clip fallback
@@ -4919,6 +4920,7 @@ export class AudioEngine {
         id: 'legacy',
       }]
 
+      const trackSources: AudioBufferSourceNode[] = []
       for (const clip of clipsToPlay) {
         const take = clip.monitor?.buffer ?? clip.buffer
         if (!take) continue
@@ -4942,12 +4944,18 @@ export class AudioEngine {
         }
         // Prune finished sources so a long looping session never accumulates them.
         source.onended = () => {
-          const idx = this.sources.indexOf(source)
-          if (idx >= 0) this.sources.splice(idx, 1)
+          const arr = this.sources.get(trackId)
+          if (arr) {
+            const idx = arr.indexOf(source)
+            if (idx >= 0) arr.splice(idx, 1)
+          }
         }
-        this.sources.push(source)
+        trackSources.push(source)
       }
-    })
+      if (trackSources.length > 0) {
+        this.sources.set(trackId, trackSources)
+      }
+    }
   }
 
   playBuffers(when = this.ctx.currentTime): void {
@@ -4962,18 +4970,89 @@ export class AudioEngine {
    * calls, and that seam is audible.
    */
   stopBuffers(keepAutomation = false): void {
-    this.sources.forEach((source) => {
-      try {
-        source.stop()
-      } catch {
-        /* already stopped */
-      }
+    this.sources.forEach((arr) => {
+      arr.forEach((source) => {
+        try {
+          source.stop()
+        } catch {
+          /* already stopped */
+        }
+      })
     })
-    this.sources.length = 0
+    this.sources.clear()
     this.stopNotes()
     // A stopped song must not leave a track parked at whatever the last drawn
     // breakpoint said; the fader is what you hear again.
     if (!keepAutomation) this.resetAutomation()
+  }
+
+  /**
+   * Reschedules clips for a specific track. Used when a clip is moved on the
+   * timeline during playback. Stops the track's currently scheduled sources
+   * and schedules new ones at their updated positions.
+   */
+  rescheduleTrackClips(trackId: string): void {
+    const track = this.tracks.get(trackId)
+    if (!track) return
+    // Stop existing sources for this track
+    const existing = this.sources.get(trackId)
+    if (existing) {
+      existing.forEach((source) => {
+        try {
+          source.stop()
+        } catch {
+          /* already stopped */
+        }
+      })
+      this.sources.delete(trackId)
+    }
+    // Re-schedule this track's clips at their current positions
+    if (this.songOriginTime === null || this.songStepDuration <= 0) return
+    const fromStep = Math.max(0, (this.ctx.currentTime - this.songOriginTime) / this.songStepDuration)
+    const when = this.ctx.currentTime + 0.02 // Small lookahead
+    const clipsToPlay = track.clips.length > 0 ? track.clips : [{
+      buffer: takeToPlay(track),
+      bufferLabel: track.bufferLabel,
+      clipStart: track.clipStart,
+      clipDuration: track.clipDuration,
+      fadeIn: track.fadeIn,
+      fadeOut: track.fadeOut,
+      takes: [],
+      id: 'legacy',
+    }]
+    const trackSources: AudioBufferSourceNode[] = []
+    for (const clip of clipsToPlay) {
+      const take = clip.monitor?.buffer ?? clip.buffer
+      if (!take) continue
+      const source = this.ctx.createBufferSource()
+      source.buffer = take
+      const shape = this.ctx.createGain()
+      source.connect(shape)
+      shape.connect(track.panner)
+      const end = this.clipEndForClip(clip)
+      const delta = clip.clipStart - fromStep
+      if (delta >= 0) {
+        const t0 = when + delta * this.songStepDuration
+        source.start(t0, 0, Math.max(0.02, end))
+        scheduleClipFade(shape, t0, 0, end, clip.fadeIn, clip.fadeOut)
+      } else {
+        const offset = -delta * this.songStepDuration
+        if (offset >= end) continue
+        source.start(when, offset, Math.max(0.02, end - offset))
+        scheduleClipFade(shape, when, offset, end, clip.fadeIn, clip.fadeOut)
+      }
+      source.onended = () => {
+        const arr = this.sources.get(trackId)
+        if (arr) {
+          const idx = arr.indexOf(source)
+          if (idx >= 0) arr.splice(idx, 1)
+        }
+      }
+      trackSources.push(source)
+    }
+    if (trackSources.length > 0) {
+      this.sources.set(trackId, trackSources)
+    }
   }
 
   // ------------------------------------------------------------ instruments

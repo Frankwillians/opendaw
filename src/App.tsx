@@ -10770,6 +10770,8 @@ export default function App() {
             : track,
         ),
       )
+      // If playing, reschedule this track's clips so the moved clip plays at its new position
+      if (isPlaying) engineRef.current?.rescheduleTrackClips(drag.trackId)
     } else {
       // Legacy: move the whole track's single clip
       engineRef.current?.setClipStart(drag.trackId, clamped)
@@ -10778,6 +10780,8 @@ export default function App() {
           track.id === drag.trackId ? { ...track, clipStart: clamped } : track,
         ),
       )
+      // If playing, reschedule this track's clips
+      if (isPlaying) engineRef.current?.rescheduleTrackClips(drag.trackId)
     }
   }
 
@@ -10800,6 +10804,11 @@ export default function App() {
       const delta = (event.clientX - drag.startX) / drag.pxPerStep
       const atStep = Math.max(0, Math.min(totalSteps - 1, snapStep(drag.startStep + delta, event.altKey)))
       moveClipToTrack(drag.trackId, drag.clipId, underId, atStep)
+      // If playing, reschedule both tracks' clips
+      if (isPlaying) {
+        engineRef.current?.rescheduleTrackClips(drag.trackId)
+        engineRef.current?.rescheduleTrackClips(underId)
+      }
     }
   }
 
